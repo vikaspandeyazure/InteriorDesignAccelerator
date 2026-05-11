@@ -1,0 +1,49 @@
+@* Sticky bottom composer - textarea with Enter-to-submit + Send button.
+   Fires OnSubmit with the prompt text when user clicks Send or hits Ctrl+Enter.
+   The Prompt value is two-way bound so a sibling component (e.g. starter
+   cards) can populate the textbox by setting Prompt on the parent. *@
+
+<div class="composer">
+    <div class="composer-input">
+        <textarea @bind="Prompt" @bind:event="oninput" @bind:after="OnPromptChanged"
+                  placeholder="Design a modern bathroom with Jaguar wall-mount basin and Parryware rain shower in matte black..."
+                  rows="3"
+                  disabled="@Busy"
+                  @onkeydown="OnKey"></textarea>
+        <button class="send-btn" type="button" @onclick="Send" disabled="@(Busy || string.IsNullOrWhiteSpace(Prompt))">
+            @(Busy ? "Designing..." : "Send")
+        </button>
+    </div>
+    <div class="hint">
+        Tip: Ctrl+Enter to send &middot; Pipeline can take 20-40 seconds end-to-end.
+    </div>
+</div>
+
+@code {
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public EventCallback<string> OnSubmit { get; set; }
+
+    // Two-way bound so PromptStarterCards (or any other sibling) can set
+    // the textarea value via the parent's @bind-Prompt.
+    [Parameter] public string Prompt { get; set; } = string.Empty;
+    [Parameter] public EventCallback<string> PromptChanged { get; set; }
+
+    private Task OnPromptChanged() => PromptChanged.InvokeAsync(Prompt);
+
+    private async Task Send()
+    {
+        if (Busy || string.IsNullOrWhiteSpace(Prompt)) return;
+        var text = Prompt.Trim();
+        Prompt = string.Empty;
+        await PromptChanged.InvokeAsync(Prompt);
+        await OnSubmit.InvokeAsync(text);
+    }
+
+    private async Task OnKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && (e.CtrlKey || e.MetaKey))
+        {
+            await Send();
+        }
+    }
+}

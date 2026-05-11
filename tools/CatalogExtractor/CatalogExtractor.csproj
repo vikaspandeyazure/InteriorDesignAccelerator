@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>InteriorDesign.CatalogExtractor</RootNamespace>
+    <AssemblyName>InteriorDesign.CatalogExtractor</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- PdfPig: pure-managed PDF text extraction (Apache 2.0).
+         Used by deploy.ps1 Phase 8d as the PRIMARY catalog extraction
+         path - replaces the AAD-fragile Document Intelligence call.
+         Works for any PDF with embedded text (i.e. all modern catalogs). -->
+    <PackageReference Include="PdfPig" Version="0.1.10" />
+  </ItemGroup>
+
+</Project>

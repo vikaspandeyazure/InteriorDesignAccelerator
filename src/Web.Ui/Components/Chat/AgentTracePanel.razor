@@ -1,0 +1,23 @@
+@* Collapsible agent trace - one li per agent step, shows the orchestrator pipeline. *@
+
+@using InteriorDesign.Shared.Contracts
+
+@if (Trace is { Count: > 0 })
+{
+    <details class="trace">
+        <summary>Agent trace (@Trace.Count steps)</summary>
+        <ol>
+            @foreach (var t in Trace)
+            {
+                <li>
+                    <code>@t.AgentName</code> · @t.Step ·
+                    @(string.IsNullOrEmpty(t.Detail) ? "—" : t.Detail)
+                </li>
+            }
+        </ol>
+    </details>
+}
+
+@code {
+    [Parameter] public IReadOnlyList<AgentTrace>? Trace { get; set; }
+}

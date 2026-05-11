@@ -1,0 +1,40 @@
+# Exclude noise from `az acr build` upload tarball.
+# Especially .vs/ which is locked by VS while open and breaks the build with EACCES.
+
+# IDE / Editor
+.vs/
+.vscode/
+.idea/
+
+# Build output
+**/bin/
+**/obj/
+**/out/
+**/publish/
+
+# Git + node + python noise
+.git/
+.gitignore
+**/node_modules/
+**/__pycache__/
+**/*.pyc
+
+# Local artifacts produced by deploy.ps1 (logs, params, zips)
+artifacts/
+
+# Local data folder (catalogs uploaded to blob, no need in image)
+data/
+
+# Local user files
+*.user
+*.suo
+*.swp
+*.tmp
+*.log
+*.cache
+
+# Docker / container metadata not needed inside the image
+docker-compose*.yml
+.dockerignore
+README*.md
+LICENSE*

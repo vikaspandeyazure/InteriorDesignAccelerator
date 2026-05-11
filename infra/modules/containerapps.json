@@ -1,0 +1,229 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.42.1.51946",
+      "templateHash": "3979571754373578325"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string"
+    },
+    "tags": {
+      "type": "object"
+    },
+    "names": {
+      "type": "object"
+    },
+    "appUserAssignedIdentityId": {
+      "type": "string"
+    },
+    "logAnalyticsCustomerId": {
+      "type": "string"
+    },
+    "logAnalyticsSharedKey": {
+      "type": "securestring"
+    },
+    "appInsightsConnectionString": {
+      "type": "string"
+    },
+    "foundryProjectEndpoint": {
+      "type": "string"
+    },
+    "foundryAccountEndpoint": {
+      "type": "string",
+      "defaultValue": ""
+    },
+    "chatModelDeployment": {
+      "type": "string"
+    },
+    "imageModelDeployment": {
+      "type": "string"
+    },
+    "searchEndpoint": {
+      "type": "string"
+    },
+    "searchIndexName": {
+      "type": "string",
+      "defaultValue": "jaguar-catalog"
+    },
+    "searchIndexNames": {
+      "type": "string",
+      "defaultValue": "jaguar-catalog,parryware-catalog"
+    },
+    "blobAccountUrl": {
+      "type": "string"
+    },
+    "catalogContainer": {
+      "type": "string"
+    },
+    "generatedContainer": {
+      "type": "string"
+    },
+    "contentUnderstandingEndpoint": {
+      "type": "string"
+    },
+    "foundryAgentIds": {
+      "type": "object"
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.App/managedEnvironments",
+      "apiVersion": "2024-03-01",
+      "name": "[parameters('names').acaEnv]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "appLogsConfiguration": {
+          "destination": "log-analytics",
+          "logAnalyticsConfiguration": {
+            "customerId": "[parameters('logAnalyticsCustomerId')]",
+            "sharedKey": "[parameters('logAnalyticsSharedKey')]"
+          }
+        },
+        "workloadProfiles": [
+          {
+            "name": "Consumption",
+            "workloadProfileType": "Consumption"
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2024-03-01",
+      "name": "[parameters('names').orchestratorApp]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[format('{0}', parameters('appUserAssignedIdentityId'))]": {}
+        }
+      },
+      "properties": {
+        "environmentId": "[resourceId('Microsoft.App/managedEnvironments', parameters('names').acaEnv)]",
+        "workloadProfileName": "Consumption",
+        "configuration": {
+          "ingress": {
+            "external": true,
+            "targetPort": 8080,
+            "transport": "auto",
+            "allowInsecure": false
+          }
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "orchestrator",
+              "image": "mcr.microsoft.com/dotnet/samples:aspnetapp",
+              "resources": {
+                "cpu": "[json('0.5')]",
+                "memory": "1Gi"
+              },
+              "env": [
+                {
+                  "name": "ASPNETCORE_URLS",
+                  "value": "http://+:8080"
+                },
+                {
+                  "name": "AZURE_CLIENT_ID",
+                  "value": "[reference(parameters('appUserAssignedIdentityId'), '2023-01-31').clientId]"
+                },
+                {
+                  "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
+                  "value": "[parameters('appInsightsConnectionString')]"
+                },
+                {
+                  "name": "Azure__FoundryProjectEndpoint",
+                  "value": "[parameters('foundryProjectEndpoint')]"
+                },
+                {
+                  "name": "Azure__ChatModelDeployment",
+                  "value": "[parameters('chatModelDeployment')]"
+                },
+                {
+                  "name": "Azure__ImageModelDeployment",
+                  "value": "[parameters('imageModelDeployment')]"
+                },
+                {
+                  "name": "Azure__SearchEndpoint",
+                  "value": "[parameters('searchEndpoint')]"
+                },
+                {
+                  "name": "Azure__SearchIndexName",
+                  "value": "[parameters('searchIndexName')]"
+                },
+                {
+                  "name": "Azure__SearchIndexNames",
+                  "value": "[parameters('searchIndexNames')]"
+                },
+                {
+                  "name": "Azure__FoundryAccountEndpoint",
+                  "value": "[parameters('foundryAccountEndpoint')]"
+                },
+                {
+                  "name": "Azure__BlobAccountUrl",
+                  "value": "[parameters('blobAccountUrl')]"
+                },
+                {
+                  "name": "Azure__CatalogContainer",
+                  "value": "[parameters('catalogContainer')]"
+                },
+                {
+                  "name": "Azure__GeneratedContainer",
+                  "value": "[parameters('generatedContainer')]"
+                },
+                {
+                  "name": "Azure__ContentUnderstandingEndpoint",
+                  "value": "[parameters('contentUnderstandingEndpoint')]"
+                },
+                {
+                  "name": "Azure__Agents__ChatAgent",
+                  "value": "chat-agent"
+                },
+                {
+                  "name": "Azure__Agents__CatalogSearchAgent",
+                  "value": "catalog-search-agent"
+                },
+                {
+                  "name": "Azure__Agents__VisionUnderstandingAgent",
+                  "value": "vision-understanding-agent"
+                },
+                {
+                  "name": "Azure__Agents__ImageGenAgent",
+                  "value": "image-gen-agent"
+                }
+              ]
+            }
+          ],
+          "scale": {
+            "minReplicas": 1,
+            "maxReplicas": 3
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.App/managedEnvironments', parameters('names').acaEnv)]"
+      ]
+    }
+  ],
+  "outputs": {
+    "orchestratorFqdn": {
+      "type": "string",
+      "value": "[format('https://{0}', reference(resourceId('Microsoft.App/containerApps', parameters('names').orchestratorApp), '2024-03-01').configuration.ingress.fqdn)]"
+    },
+    "containerAppName": {
+      "type": "string",
+      "value": "[parameters('names').orchestratorApp]"
+    },
+    "environmentId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.App/managedEnvironments', parameters('names').acaEnv)]"
+    }
+  }
+}

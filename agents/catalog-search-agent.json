@@ -1,0 +1,22 @@
+{
+  "name": "catalog-search-agent",
+  "model": "gpt-4.1-mini",
+  "description": "Grounded retrieval agent over the bath-fittings AI Search indexes (jaguar-catalog + parryware-catalog) via Foundry Knowledge bindings.",
+  "instructions": "Search the bathroom-fittings knowledge base. Return ONLY a JSON array of {id,brand,category,name,description,imageUrl}. No prose, no markdown.",
+  "knowledge": [
+    {
+      "kind": "azure_ai_search",
+      "azure_ai_search": {
+        "connection_name": "jaguar-catalog",
+        "index_name": "jaguar-catalog"
+      }
+    },
+    {
+      "kind": "azure_ai_search",
+      "azure_ai_search": {
+        "connection_name": "parryware-catalog",
+        "index_name": "parryware-catalog"
+      }
+    }
+  ]
+}

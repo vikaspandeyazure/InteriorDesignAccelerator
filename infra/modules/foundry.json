@@ -1,0 +1,385 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.42.1.51946",
+      "templateHash": "1002897362046035645"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string"
+    },
+    "tags": {
+      "type": "object"
+    },
+    "names": {
+      "type": "object"
+    },
+    "chatModelName": {
+      "type": "string"
+    },
+    "imageModelName": {
+      "type": "string"
+    },
+    "chatModelVersion": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional explicit chat model version. Empty = let Azure pick the default."
+      }
+    },
+    "imageModelVersion": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional explicit image model version."
+      }
+    },
+    "chatModelCapacity": {
+      "type": "int",
+      "defaultValue": 50,
+      "metadata": {
+        "description": "Chat model deployment capacity in RPM."
+      }
+    },
+    "imageModelCapacity": {
+      "type": "int",
+      "defaultValue": 1,
+      "metadata": {
+        "description": "Image model deployment capacity in RPM."
+      }
+    },
+    "appUserAssignedIdentityPrincipalId": {
+      "type": "string"
+    },
+    "deployerObjectId": {
+      "type": "string"
+    },
+    "searchServiceId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Azure AI Search service resource ID. When non-empty, a CognitiveSearch connection is created on the project so agents can use the azure_ai_search tool."
+      }
+    },
+    "searchEndpoint": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Azure AI Search endpoint URL (https://<name>.search.windows.net). Required when searchServiceId is set."
+      }
+    },
+    "storageAccountId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Storage account resource ID. When non-empty, the project MI gets Storage Blob Data Reader so vision/image agents can read blob URLs."
+      }
+    }
+  },
+  "variables": {
+    "chatModelFormat": "[if(startsWith(toLower(parameters('chatModelName')), 'mai-'), 'Microsoft', 'OpenAI')]",
+    "imageModelFormat": "[if(startsWith(toLower(parameters('imageModelName')), 'mai-'), 'Microsoft', 'OpenAI')]",
+    "openAIUser": "5e0bd9bd-7b93-4f28-af87-19fc36ad61bd",
+    "cognitiveServicesUser": "a97b65f3-24c7-4388-baec-2e87135dc908",
+    "aiDeveloperRole": "64702f94-c441-49e6-a78b-ef80e0188fee",
+    "aiUserRole": "53ca6127-db72-4b80-b1b0-d745d6d5456d",
+    "aiProjectManagerRole": "eadc314b-1a2d-4efa-be10-5d325db5065e",
+    "searchIndexDataReader": "1407120a-92aa-4202-b7e9-c0e197c71c8f",
+    "storageBlobDataReader": "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.CognitiveServices/accounts",
+      "apiVersion": "2025-04-01-preview",
+      "name": "[parameters('names').foundryAccount]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "kind": "AIServices",
+      "sku": {
+        "name": "S0"
+      },
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "customSubDomainName": "[parameters('names').foundryAccount]",
+        "publicNetworkAccess": "Enabled",
+        "disableLocalAuth": false,
+        "allowProjectManagement": true
+      }
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts/projects",
+      "apiVersion": "2025-04-01-preview",
+      "name": "[format('{0}/{1}', parameters('names').foundryAccount, parameters('names').foundryProject)]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "displayName": "Interior Design Accelerator",
+        "description": "Bathroom design accelerator project (catalog grounding + image generation)."
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('names').foundryAccount)]"
+      ]
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts/deployments",
+      "apiVersion": "2024-10-01",
+      "name": "[format('{0}/{1}', parameters('names').foundryAccount, parameters('chatModelName'))]",
+      "sku": {
+        "name": "GlobalStandard",
+        "capacity": "[parameters('chatModelCapacity')]"
+      },
+      "properties": {
+        "model": "[if(empty(parameters('chatModelVersion')), createObject('format', variables('chatModelFormat'), 'name', parameters('chatModelName')), createObject('format', variables('chatModelFormat'), 'name', parameters('chatModelName'), 'version', parameters('chatModelVersion')))]",
+        "raiPolicyName": "Microsoft.DefaultV2",
+        "versionUpgradeOption": "OnceCurrentVersionExpired"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('names').foundryAccount)]"
+      ]
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts/deployments",
+      "apiVersion": "2024-10-01",
+      "name": "[format('{0}/{1}', parameters('names').foundryAccount, parameters('imageModelName'))]",
+      "sku": {
+        "name": "GlobalStandard",
+        "capacity": "[parameters('imageModelCapacity')]"
+      },
+      "properties": {
+        "model": "[if(empty(parameters('imageModelVersion')), createObject('format', variables('imageModelFormat'), 'name', parameters('imageModelName')), createObject('format', variables('imageModelFormat'), 'name', parameters('imageModelName'), 'version', parameters('imageModelVersion')))]",
+        "raiPolicyName": "Microsoft.DefaultV2"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('names').foundryAccount)]",
+        "[resourceId('Microsoft.CognitiveServices/accounts/deployments', parameters('names').foundryAccount, parameters('chatModelName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.CognitiveServices/accounts', parameters('names').foundryAccount)]",
+      "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts', parameters('names').foundryAccount), parameters('appUserAssignedIdentityPrincipalId'), variables('openAIUser'))]",
+      "properties": {
+        "principalId": "[parameters('appUserAssignedIdentityPrincipalId')]",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('openAIUser'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('names').foundryAccount)]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.CognitiveServices/accounts', parameters('names').foundryAccount)]",
+      "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts', parameters('names').foundryAccount), parameters('appUserAssignedIdentityPrincipalId'), variables('cognitiveServicesUser'))]",
+      "properties": {
+        "principalId": "[parameters('appUserAssignedIdentityPrincipalId')]",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('cognitiveServicesUser'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('names').foundryAccount)]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.CognitiveServices/accounts', parameters('names').foundryAccount)]",
+      "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts', parameters('names').foundryAccount), parameters('appUserAssignedIdentityPrincipalId'), variables('aiDeveloperRole'))]",
+      "properties": {
+        "principalId": "[parameters('appUserAssignedIdentityPrincipalId')]",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('aiDeveloperRole'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('names').foundryAccount)]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.CognitiveServices/accounts', parameters('names').foundryAccount)]",
+      "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts', parameters('names').foundryAccount), parameters('deployerObjectId'), variables('aiDeveloperRole'))]",
+      "properties": {
+        "principalId": "[parameters('deployerObjectId')]",
+        "principalType": "User",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('aiDeveloperRole'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('names').foundryAccount)]"
+      ]
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts/capabilityHosts",
+      "apiVersion": "2025-10-01-preview",
+      "name": "[format('{0}/{1}', parameters('names').foundryAccount, 'agents')]",
+      "properties": {
+        "capabilityHostKind": "Agents"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', parameters('names').foundryAccount)]",
+        "[resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('names').foundryAccount, parameters('names').foundryProject)]"
+      ]
+    },
+    {
+      "condition": "[not(empty(parameters('searchServiceId')))]",
+      "type": "Microsoft.CognitiveServices/accounts/projects/connections",
+      "apiVersion": "2025-04-01-preview",
+      "name": "[format('{0}/{1}/{2}', parameters('names').foundryAccount, parameters('names').foundryProject, 'jaguar-catalog')]",
+      "properties": {
+        "category": "CognitiveSearch",
+        "target": "[parameters('searchEndpoint')]",
+        "authType": "AAD",
+        "isSharedToAll": true,
+        "metadata": {
+          "ApiType": "Azure",
+          "ResourceId": "[parameters('searchServiceId')]",
+          "IndexName": "jaguar-catalog"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('names').foundryAccount, parameters('names').foundryProject)]"
+      ]
+    },
+    {
+      "condition": "[not(empty(parameters('searchServiceId')))]",
+      "type": "Microsoft.CognitiveServices/accounts/projects/connections",
+      "apiVersion": "2025-04-01-preview",
+      "name": "[format('{0}/{1}/{2}', parameters('names').foundryAccount, parameters('names').foundryProject, 'parryware-catalog')]",
+      "properties": {
+        "category": "CognitiveSearch",
+        "target": "[parameters('searchEndpoint')]",
+        "authType": "AAD",
+        "isSharedToAll": true,
+        "metadata": {
+          "ApiType": "Azure",
+          "ResourceId": "[parameters('searchServiceId')]",
+          "IndexName": "parryware-catalog"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('names').foundryAccount, parameters('names').foundryProject)]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('names').foundryAccount, parameters('names').foundryProject)]",
+      "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('names').foundryAccount, parameters('names').foundryProject), parameters('deployerObjectId'), variables('aiProjectManagerRole'))]",
+      "properties": {
+        "principalId": "[parameters('deployerObjectId')]",
+        "principalType": "User",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('aiProjectManagerRole'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('names').foundryAccount, parameters('names').foundryProject)]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('names').foundryAccount, parameters('names').foundryProject)]",
+      "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('names').foundryAccount, parameters('names').foundryProject), parameters('appUserAssignedIdentityPrincipalId'), variables('aiUserRole'))]",
+      "properties": {
+        "principalId": "[parameters('appUserAssignedIdentityPrincipalId')]",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('aiUserRole'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('names').foundryAccount, parameters('names').foundryProject)]"
+      ]
+    },
+    {
+      "condition": "[not(empty(parameters('searchServiceId')))]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('names').foundryAccount, parameters('names').foundryProject), parameters('searchServiceId'), 'searchIndexDataReader')]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('names').foundryAccount, parameters('names').foundryProject), '2025-04-01-preview', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('searchIndexDataReader'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('names').foundryAccount, parameters('names').foundryProject)]"
+      ]
+    },
+    {
+      "condition": "[not(empty(parameters('storageAccountId')))]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('names').foundryAccount, parameters('names').foundryProject), parameters('storageAccountId'), 'storageBlobDataReader')]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('names').foundryAccount, parameters('names').foundryProject), '2025-04-01-preview', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataReader'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('names').foundryAccount, parameters('names').foundryProject)]"
+      ]
+    }
+  ],
+  "outputs": {
+    "accountName": {
+      "type": "string",
+      "value": "[parameters('names').foundryAccount]"
+    },
+    "accountEndpoint": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.CognitiveServices/accounts', parameters('names').foundryAccount), '2025-04-01-preview').endpoint]"
+    },
+    "projectId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('names').foundryAccount, parameters('names').foundryProject)]"
+    },
+    "projectName": {
+      "type": "string",
+      "value": "[parameters('names').foundryProject]"
+    },
+    "projectEndpoint": {
+      "type": "string",
+      "value": "[format('{0}api/projects/{1}', reference(resourceId('Microsoft.CognitiveServices/accounts', parameters('names').foundryAccount), '2025-04-01-preview').endpoint, parameters('names').foundryProject)]"
+    },
+    "projectAgentsEndpoint": {
+      "type": "string",
+      "value": "[format('https://{0}.services.ai.azure.com/api/projects/{1}', parameters('names').foundryAccount, parameters('names').foundryProject)]"
+    },
+    "chatModelDeployment": {
+      "type": "string",
+      "value": "[parameters('chatModelName')]"
+    },
+    "imageModelDeployment": {
+      "type": "string",
+      "value": "[parameters('imageModelName')]"
+    },
+    "projectPrincipalId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('names').foundryAccount, parameters('names').foundryProject), '2025-04-01-preview', 'full').identity.principalId]"
+    },
+    "searchConnectionIdJaguar": {
+      "type": "string",
+      "value": "[if(not(empty(parameters('searchServiceId'))), resourceId('Microsoft.CognitiveServices/accounts/projects/connections', parameters('names').foundryAccount, parameters('names').foundryProject, 'jaguar-catalog'), '')]"
+    },
+    "searchConnectionIdParryware": {
+      "type": "string",
+      "value": "[if(not(empty(parameters('searchServiceId'))), resourceId('Microsoft.CognitiveServices/accounts/projects/connections', parameters('names').foundryAccount, parameters('names').foundryProject, 'parryware-catalog'), '')]"
+    },
+    "searchConnectionId": {
+      "type": "string",
+      "value": "[if(not(empty(parameters('searchServiceId'))), resourceId('Microsoft.CognitiveServices/accounts/projects/connections', parameters('names').foundryAccount, parameters('names').foundryProject, 'jaguar-catalog'), '')]"
+    },
+    "bicepVersion": {
+      "type": "string",
+      "value": "2026-05-02-twoindexes-v5"
+    }
+  }
+}

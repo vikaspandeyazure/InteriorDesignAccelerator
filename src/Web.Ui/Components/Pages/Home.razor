@@ -1,0 +1,130 @@
+@page "/"
+@rendermode InteractiveServer
+@inject DesignApiClient Api
+@inject ILogger<Home> Log
+
+<PageTitle>Modern Bathroom Design Studio</PageTitle>
+
+<div class="studio-layout">
+
+    <Sidebar UseJaguar="useJaguar"  UseJaguarChanged="@(v => useJaguar = v)"
+             UseParryware="useParryware" UseParrywareChanged="@(v => useParryware = v)"
+             StyleHints="@styles" StyleHintsChanged="@(v => styles = v)" />
+
+    <main class="studio-main">
+        <header class="studio-header">
+            <h1>Modern Bathroom Design Studio</h1>
+            <p class="sub">Powered by Azure AI Search &middot; Microsoft Foundry &middot; Microsoft Agent Framework &middot; MAI-Image-2</p>
+        </header>
+
+        @if (!string.IsNullOrEmpty(error))
+        {
+            <div style="padding: 0 24px;">
+                <div class="error-bar">@error</div>
+            </div>
+        }
+
+        <ChatThread Messages="messages" />
+
+        @* Starter cards only on the very first turn (no messages yet AND not currently designing).
+           Clicking a card replaces the composer text - user can edit then Send. *@
+        @if (messages.Count == 0 && !busy)
+        {
+            <PromptStarterCards OnPick="@OnStarterPicked" />
+        }
+
+        <ComposerInput Busy="busy" OnSubmit="HandleSubmit"
+                       Prompt="@composerText" PromptChanged="@(v => composerText = v)" />
+    </main>
+
+    <LiveTracePanel Trace="liveTrace" IsRunning="busy" />
+
+</div>
+
+@code {
+    private bool useJaguar = true;
+    private bool useParryware = true;
+    private string styles = "modern, minimalist";
+
+    private bool busy;
+    private string? error;
+    private string? conversationId;
+    private List<ChatMessage> messages = new();
+
+    // Two-way bound to ComposerInput. PromptStarterCards sets this when a
+    // user clicks an example card so the prompt appears in the textbox
+    // ready to be reviewed / tweaked / sent.
+    private string composerText = string.Empty;
+
+    // Live trace for the right-side rail. Cleared at the start of each turn,
+    // appended to as each `event: trace` arrives over SSE, and finalized when
+    // the `event: done` payload is received.
+    private List<AgentTrace> liveTrace = new();
+
+    private void OnStarterPicked(string prompt)
+    {
+        composerText = prompt;
+        StateHasChanged();
+    }
+
+    private async Task HandleSubmit(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return;
+        error = null;
+
+        // Add the user bubble + a pending assistant bubble immediately
+        messages.Add(new ChatMessage { Role = "user", Text = text });
+        var pending = new ChatMessage { Role = "assistant", Pending = true };
+        messages.Add(pending);
+        liveTrace = new List<AgentTrace>();
+        busy = true;
+        StateHasChanged();
+
+        try
+        {
+            var brands = new List<string>();
+            if (useJaguar)    brands.Add("Jaguar");
+            if (useParryware) brands.Add("Parryware");
+
+            var styleHints = (styles ?? string.Empty)
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList();
+
+            var req = new DesignRequest(text, brands, styleHints, conversationId);
+
+            await foreach (var ev in Api.GenerateStreamAsync(req))
+            {
+                switch (ev.Kind)
+                {
+                    case "trace" when ev.Trace is not null:
+                        liveTrace.Add(ev.Trace);
+                        StateHasChanged();
+                        break;
+
+                    case "done" when ev.Final is not null:
+                        pending.Pending = false;
+                        pending.Result = ev.Final;
+                        conversationId = ev.Final.ConversationId;
+                        liveTrace = ev.Final.Trace?.ToList() ?? liveTrace;
+                        StateHasChanged();
+                        break;
+
+                    case "error":
+                        throw new InvalidOperationException(ev.Error ?? "stream error");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.LogError(ex, "Generate failed");
+            error = ex.Message;
+            pending.Pending = false;
+            pending.Text = "Sorry, the design pipeline failed. See error above.";
+        }
+        finally
+        {
+            busy = false;
+            StateHasChanged();
+        }
+    }
+}

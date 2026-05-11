@@ -1,0 +1,47 @@
+@* Three clickable starter cards. When a card is clicked the parent's
+   bound prompt text is replaced with the card's example prompt. The user
+   can then review / tweak it and hit Send. Cards are intended to be shown
+   only on the empty / "first turn" state of the chat, but the parent owns
+   that gating. *@
+
+<div class="starter-cards">
+    <div class="starter-cards-header">Try with a prompt</div>
+    <div class="starter-grid">
+        @foreach (var s in Starters)
+        {
+            <button class="starter-card" type="button" @onclick="() => Pick(s.Prompt)">
+                <div class="starter-card-eyebrow">@s.Eyebrow</div>
+                <div class="starter-card-title">@s.Title</div>
+                <div class="starter-card-prompt">@s.Prompt</div>
+                <div class="starter-card-action">Use this prompt &rarr;</div>
+            </button>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public EventCallback<string> OnPick { get; set; }
+
+    private record Starter(string Eyebrow, string Title, string Prompt);
+
+    // Each prompt is deliberately written to exercise BOTH brands and the
+    // catalog-search-agent's Foundry IQ retrieval across the two indexes,
+    // so the live trace consistently shows multi-index hits.
+    private static readonly Starter[] Starters = new[]
+    {
+        new Starter(
+            "Modern minimalist",
+            "Matte black urban bathroom",
+            "Design a modern minimalist bathroom with a Jaguar Laguna wall-mount basin in matte black and a Parryware rain shower, against light grey microcement walls and warm oak accents."),
+        new Starter(
+            "Luxury marble",
+            "Spa-grade hotel ensuite",
+            "Design a luxury marble ensuite featuring a Jaguar single-lever basin mixer in brushed gold, a Parryware concealed thermostatic shower, and book-matched Calacatta marble walls with warm uplighting."),
+        new Starter(
+            "Compact family bath",
+            "Practical family bathroom",
+            "Design a practical family bathroom with a Parryware wall-hung WC, a Jaguar wall-mount basin in chrome, and a Parryware health faucet, finished in soft white tiles with a single accent wall in sage green.")
+    };
+
+    private Task Pick(string prompt) => OnPick.InvokeAsync(prompt);
+}

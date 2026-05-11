@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Orchestrator.Api/Orchestrator.Api.csproj" />
+    <Project Path="src/Shared.Contracts/Shared.Contracts.csproj" />
+    <Project Path="src/Web.Ui/Web.Ui.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Orchestrator.Tests/Orchestrator.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/CatalogExtractor/CatalogExtractor.csproj" />
+  </Folder>
+</Solution>

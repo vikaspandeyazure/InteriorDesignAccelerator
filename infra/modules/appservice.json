@@ -1,0 +1,113 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.42.1.51946",
+      "templateHash": "6729186410944170212"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string"
+    },
+    "tags": {
+      "type": "object"
+    },
+    "names": {
+      "type": "object"
+    },
+    "appUserAssignedIdentityId": {
+      "type": "string"
+    },
+    "appInsightsConnectionString": {
+      "type": "string"
+    },
+    "orchestratorBaseUrl": {
+      "type": "string"
+    },
+    "apimSubscriptionKeySecretUri": {
+      "type": "string"
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2024-04-01",
+      "name": "[parameters('names').appServicePlan]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "sku": {
+        "name": "B1",
+        "tier": "Basic"
+      },
+      "kind": "linux",
+      "properties": {
+        "reserved": true
+      }
+    },
+    {
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2024-04-01",
+      "name": "[parameters('names').webApp]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "kind": "app,linux",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[format('{0}', parameters('appUserAssignedIdentityId'))]": {}
+        }
+      },
+      "properties": {
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', parameters('names').appServicePlan)]",
+        "httpsOnly": true,
+        "keyVaultReferenceIdentity": "[parameters('appUserAssignedIdentityId')]",
+        "siteConfig": {
+          "linuxFxVersion": "DOTNETCORE|8.0",
+          "alwaysOn": true,
+          "webSocketsEnabled": true,
+          "ftpsState": "Disabled",
+          "http20Enabled": true,
+          "minTlsVersion": "1.2",
+          "appSettings": [
+            {
+              "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
+              "value": "[parameters('appInsightsConnectionString')]"
+            },
+            {
+              "name": "AZURE_CLIENT_ID",
+              "value": "[reference(parameters('appUserAssignedIdentityId'), '2023-01-31').clientId]"
+            },
+            {
+              "name": "Orchestrator__BaseUrl",
+              "value": "[parameters('orchestratorBaseUrl')]"
+            },
+            {
+              "name": "Orchestrator__ApimSubscriptionKey",
+              "value": "[if(empty(parameters('apimSubscriptionKeySecretUri')), '', format('@Microsoft.KeyVault(SecretUri={0})', parameters('apimSubscriptionKeySecretUri')))]"
+            },
+            {
+              "name": "WEBSITE_RUN_FROM_PACKAGE",
+              "value": "1"
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/serverfarms', parameters('names').appServicePlan)]"
+      ]
+    }
+  ],
+  "outputs": {
+    "defaultHostName": {
+      "type": "string",
+      "value": "[format('https://{0}', reference(resourceId('Microsoft.Web/sites', parameters('names').webApp), '2024-04-01').defaultHostName)]"
+    },
+    "webAppName": {
+      "type": "string",
+      "value": "[parameters('names').webApp]"
+    }
+  }
+}

@@ -1,0 +1,33 @@
+@* Chat thread - renders the list of messages (user + assistant turns).
+   Empty state shown when there are no messages yet. *@
+
+@using InteriorDesign.Web.Ui.Models
+
+<div class="chat-thread">
+    @if (Messages is null || Messages.Count == 0)
+    {
+        <div class="empty">
+            <div class="hero"></div>
+            <div class="title">Modern Bathroom Design Studio</div>
+            <div class="hint">
+                Describe the bathroom you want. The orchestrator will pull matching products from
+                the Jaguar and Parryware catalog indexes (Azure AI Search, sourced from the original
+                PDFs) and render a photorealistic visualization with the MAI-Image-2 model.
+            </div>
+            <div class="hint" style="margin-top: 8px; font-style: italic;">
+                Try: <em>"Design a modern bathroom with Jaguar wall-mount basin and Parryware rain shower in matte black"</em>
+            </div>
+        </div>
+    }
+    else
+    {
+        @foreach (var m in Messages)
+        {
+            <MessageBubble Role="@m.Role" Text="@m.Text" Result="@m.Result" Pending="@m.Pending" />
+        }
+    }
+</div>
+
+@code {
+    [Parameter] public IReadOnlyList<ChatMessage>? Messages { get; set; }
+}

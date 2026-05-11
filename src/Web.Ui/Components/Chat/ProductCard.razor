@@ -1,0 +1,99 @@
+@* Single product card - shown in the assistant bubble's product grid. *@
+
+@using InteriorDesign.Shared.Contracts
+@using InteriorDesign.Web.Ui.Services
+@inject DesignApiClient Api
+
+<div class="product-card @(Item.UsedAsVisualReference ? "is-mai-ref" : "")">
+    @if (Item.UsedAsVisualReference)
+    {
+        <div class="mai-badge" title="Foundry IQ ranked this as one of the top semantic matches across the Jaguar and Parryware catalog indexes for your brief.">TOP MATCH &middot; from your catalog</div>
+    }
+    <div class="brand">@Item.Brand</div>
+    <div class="name">@Item.Name</div>
+    @if (!string.IsNullOrWhiteSpace(Item.SourceFile) && Item.PageNumber is > 0)
+    {
+        @* Rendered PDF page thumbnail - shows the FULL cited page (heading,
+           description, product photo, page chrome) in its actual catalog
+           layout. Streamed from /ui/catalog/page-rendered (a same-origin
+           Web.Ui proxy that forwards to the orchestrator's
+           /api/catalog/page-rendered with the APIM subscription key attached).
+           Going via Web.Ui keeps the request same-origin so the browser
+           doesn't need an APIM key and isn't subject to a stale absolute
+           orchestrator URL. Clicking opens the per-page PDF extract via the
+           same proxy.
+
+           Rendered for ALL page-grounded items, not just the top-2
+           "UsedAsVisualReference" ones - the TOP MATCH badge is the signal
+           that distinguishes Foundry IQ's best matches; the thumbnail is
+           always-on context so every card shows the actual cited page. *@
+        <a class="hero-thumb" href="@RewriteToProxy(Item.ImageUrl)" target="_blank" rel="noopener" title="Open full PDF page">
+            <img src="@($"/ui/catalog/page-rendered?brand={Uri.EscapeDataString(Item.Brand)}&file={Uri.EscapeDataString(Item.SourceFile)}&page={Item.PageNumber}&width=900")"
+                 alt="Catalog page @Item.PageNumber"
+                 loading="lazy" />
+        </a>
+    }
+    @if (!string.IsNullOrEmpty(Item.SourceFile))
+    {
+        <div class="source-line">
+            <span class="src-label">Document:</span> @ShortFile(Item.SourceFile)
+            @if (Item.PageNumber is > 0)
+            {
+                <span class="src-page">&middot; Page @Item.PageNumber</span>
+            }
+        </div>
+    }
+    <div class="meta">
+        <span>@Item.Category</span>
+        @if (!string.IsNullOrEmpty(Item.ImageUrl))
+        {
+            <a href="@RewriteToProxy(Item.ImageUrl)" target="_blank" rel="noopener" title="@RefTitle()">@RefLabel()</a>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public CatalogItem Item { get; set; } = default!;
+
+    /// <summary>
+    /// Rewrites the orchestrator's "/api/catalog/page?..." URL to the
+    /// same-origin Web.Ui proxy "/ui/catalog/page?..." so the browser never
+    /// has to reach the orchestrator directly (which would fail behind APIM
+    /// or against a stale absolute base URL).
+    /// </summary>
+    private static string RewriteToProxy(string? url)
+    {
+        if (string.IsNullOrEmpty(url)) return string.Empty;
+        const string prefix = "/api/catalog/";
+        var idx = url.IndexOf(prefix, StringComparison.OrdinalIgnoreCase);
+        if (idx < 0) return url;
+        return "/ui/catalog/" + url.Substring(idx + prefix.Length);
+    }
+
+    private string RefLabel()
+    {
+        // "view page 8" if the entry came from a specific page,
+        // "view source" if it's a brand-profile / whole-document entry.
+        return Item.PageNumber is > 0 ? $"view page {Item.PageNumber}" : "view source";
+    }
+
+    private string RefTitle()
+    {
+        var src = string.IsNullOrEmpty(Item.SourceFile) ? "source PDF" : Item.SourceFile;
+        return Item.PageNumber is > 0 ? $"{src} (page {Item.PageNumber})" : src;
+    }
+
+    /// <summary>
+    /// Compact display name for the source PDF (drops "-pages-deleted-pages-N"
+    /// and trailing "(N)" markers our pre-trim script leaves on the filename).
+    /// </summary>
+    private static string ShortFile(string? file)
+    {
+        if (string.IsNullOrEmpty(file)) return "";
+        var stem = System.IO.Path.GetFileNameWithoutExtension(file);
+        var idx = stem.IndexOf("-pages-deleted", StringComparison.OrdinalIgnoreCase);
+        if (idx > 0) stem = stem.Substring(0, idx);
+        stem = System.Text.RegularExpressions.Regex.Replace(stem, @"\s*\(\d+\)\s*$", "");
+        return stem;
+    }
+}

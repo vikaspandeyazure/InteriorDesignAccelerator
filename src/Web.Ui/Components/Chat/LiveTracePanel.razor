@@ -1,0 +1,80 @@
+@* Foundry-Playground-style live trace rail. Renders the streaming pipeline events
+   as they arrive (one row per agent step) so the user can see exactly what the
+   orchestrator is doing right now. *@
+
+@using InteriorDesign.Shared.Contracts
+
+<aside class="live-trace">
+    <div class="lt-head">
+        <span class="lt-dot @(IsRunning ? "running" : (Trace is { Count: > 0 } ? "done" : "idle"))"></span>
+        <div class="lt-title">
+            <strong>Live Pipeline</strong>
+            <div class="lt-sub">
+                @if (IsRunning)
+                {
+                    <span>Running &middot; @Trace?.Count step@(Trace?.Count == 1 ? "" : "s")</span>
+                }
+                else if (Trace is { Count: > 0 })
+                {
+                    <span>Completed &middot; @Trace.Count step@(Trace.Count == 1 ? "" : "s")</span>
+                }
+                else
+                {
+                    <span>Idle &middot; submit a brief to begin</span>
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="lt-body">
+        @if (Trace is null || Trace.Count == 0)
+        {
+            <div class="lt-empty">
+                <p>Each turn streams its <em>plan &rarr; retrieve &rarr; compose &rarr; render</em> trace here in real time, just like the Microsoft Foundry Playground.</p>
+                <ul class="lt-legend">
+                    <li><span class="lt-pill plan">plan</span> Chat agent rewrites the brief into a search query.</li>
+                    <li><span class="lt-pill retrieve">retrieve</span> Catalog-search agent hits the brand AI Search indexes.</li>
+                    <li><span class="lt-pill compose">compose</span> Chat agent writes narrative + image prompt.</li>
+                    <li><span class="lt-pill render">render</span> Image-gen agent calls MAI-Image-2.</li>
+                </ul>
+            </div>
+        }
+        else
+        {
+            <ol class="lt-steps">
+                @for (int i = 0; i < Trace.Count; i++)
+                {
+                    var t = Trace[i];
+                    var kind = StepKind(t.Step);
+                    var isLast = i == Trace.Count - 1;
+                    <li class="lt-step @(isLast && IsRunning ? "active" : "")">
+                        <div class="lt-step-row">
+                            <span class="lt-pill @kind">@t.Step</span>
+                            <code class="lt-agent">@t.AgentName</code>
+                            <span class="lt-time">@t.At.ToLocalTime().ToString("HH:mm:ss")</span>
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(t.Detail))
+                        {
+                            <div class="lt-detail">@t.Detail</div>
+                        }
+                    </li>
+                }
+            </ol>
+        }
+    </div>
+</aside>
+
+@code {
+    [Parameter] public IReadOnlyList<AgentTrace>? Trace { get; set; }
+    [Parameter] public bool IsRunning { get; set; }
+
+    private static string StepKind(string step) => step switch
+    {
+        var s when s.StartsWith("plan", StringComparison.OrdinalIgnoreCase)     => "plan",
+        var s when s.StartsWith("retrieve", StringComparison.OrdinalIgnoreCase) => "retrieve",
+        var s when s.StartsWith("compose", StringComparison.OrdinalIgnoreCase)  => "compose",
+        var s when s.StartsWith("render", StringComparison.OrdinalIgnoreCase)   => "render",
+        "started" or "done"                                                     => "meta",
+        _                                                                       => "meta"
+    };
+}

@@ -1,0 +1,35 @@
+## bin/obj
+**/bin/
+**/obj/
+**/artifacts/
+*.user
+*.suo
+
+## VS / Rider
+.vs/
+.idea/
+
+## .NET
+*.pdb
+*.dll
+*.exe
+
+## env
+*.env
+.env*
+
+## node
+node_modules/
+
+## OS
+.DS_Store
+Thumbs.db
+
+# Deploy artifacts (logs, params, build context) - never commit
+artifacts/deploy.log
+artifacts/deploy-*.log
+artifacts/deploy-*.log.err
+artifacts/build-ctx/
+artifacts/last-deploy*.txt
+artifacts/params-*.json
+artifacts/webui*

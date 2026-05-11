@@ -1,0 +1,76 @@
+@* Single message bubble - user or assistant. Assistant bubbles can include
+   the generated image, narrative, product grid, and agent trace. *@
+
+@using InteriorDesign.Shared.Contracts
+
+@if (Role == "user")
+{
+    <div class="bubble user">
+        <div class="role">You</div>
+        <div>@Text</div>
+    </div>
+}
+else
+{
+    <div class="bubble assistant">
+        <div class="role">Designer</div>
+        @if (Pending)
+        {
+            <div class="loading-dots"><span></span><span></span><span></span></div>
+        }
+        else if (Result is not null)
+        {
+            <div class="gen-image @(string.IsNullOrEmpty(Result.GeneratedImageBase64) ? "placeholder" : "")">
+                @if (!string.IsNullOrEmpty(Result.GeneratedImageBase64))
+                {
+                    <img src="@($"data:image/png;base64,{Result.GeneratedImageBase64}")" alt="Generated bathroom render" />
+                }
+                else
+                {
+                    <span>Image not yet returned (rate-limited or pipeline error - see trace below).</span>
+                }
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(Result.Narrative))
+            {
+                <div class="narrative">@Result.Narrative</div>
+            }
+
+            @if (Result.Selections is { Count: > 0 })
+            {
+                @* Discovery section: while MAI was rendering the inspirational
+                   visualization above, Foundry IQ searched the vendor catalog
+                   indexes in parallel and surfaced real products that match
+                   the designer's brief. Honest framing: MAI for creative
+                   interpretation; Foundry IQ for shoppable discovery. *@
+                <div class="suggestions-header">
+                    <div class="suggestions-title">Fittings you may like</div>
+                    <div class="suggestions-sub">
+                        <strong>Foundry IQ</strong> searched the Jaguar and Parryware catalog indexes and
+                        surfaced @Result.Selections.Count real product@(Result.Selections.Count == 1 ? "" : "s")
+                        that match your brief. Click any card to open the source PDF page.
+                    </div>
+                </div>
+                <div class="product-grid">
+                    @foreach (var p in Result.Selections)
+                    {
+                        <ProductCard Item="p" />
+                    }
+                </div>
+            }
+
+            <AgentTracePanel Trace="Result.Trace" />
+        }
+        else if (!string.IsNullOrWhiteSpace(Text))
+        {
+            <div class="narrative">@Text</div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public string Role { get; set; } = "user";
+    [Parameter] public string? Text { get; set; }
+    [Parameter] public DesignResponse? Result { get; set; }
+    [Parameter] public bool Pending { get; set; }
+}

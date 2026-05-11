@@ -1,0 +1,132 @@
+@* Sidebar with brand toggles + style preset chips.
+   Two-way binds via EventCallback so parent owns the state. *@
+
+<aside class="studio-sidebar">
+    <h2>Design Studio</h2>
+    <div class="tag" style="margin-top: 4px;">Interior Design Accelerator</div>
+
+    <div class="tag">Brands</div>
+    <div class="brand-row">
+        <label class="toggle">
+            <input type="checkbox" checked="@UseJaguar" @onchange="OnJaguarChanged" />
+            <span>Jaguar</span>
+        </label>
+        <label class="toggle">
+            <input type="checkbox" checked="@UseParryware" @onchange="OnParrywareChanged" />
+            <span>Parryware</span>
+        </label>
+    </div>
+
+    <div class="tag">Style presets</div>
+    <div class="preset-row">
+        @foreach (var p in Presets)
+        {
+            var isActive = SelectedPresets.Contains(p);
+            <button class="preset-chip @(isActive ? "active" : "")"
+                    type="button"
+                    @onclick="() => OnPreset(p)">@p</button>
+        }
+    </div>
+
+    <div class="tag">Custom style hints</div>
+    <input class="preset-chip" style="text-align:left; width:100%; padding:8px 10px;"
+           @bind="StyleHintsText"
+           @bind:event="oninput"
+           @bind:after="OnStyleTextChanged"
+           placeholder="e.g. modern, minimalist" />
+
+    <div class="footer">
+        <strong>Pipeline</strong>
+        <p style="margin: 4px 0;">
+            Foundry hosted agents -> AI Search (per-brand index) -> MAI image generation
+        </p>
+        <p style="margin: 8px 0 0 0;">
+            <span style="color: #1f3a2e; font-weight: 700;">&bull;</span>
+            All agents run server-side via Microsoft Foundry Agent Service.
+        </p>
+    </div>
+</aside>
+
+@code {
+    [Parameter] public bool UseJaguar { get; set; } = true;
+    [Parameter] public EventCallback<bool> UseJaguarChanged { get; set; }
+    [Parameter] public bool UseParryware { get; set; } = true;
+    [Parameter] public EventCallback<bool> UseParrywareChanged { get; set; }
+    [Parameter] public string StyleHints { get; set; } = "modern, minimalist";
+    [Parameter] public EventCallback<string> StyleHintsChanged { get; set; }
+
+    private static readonly string[] Presets = new[]
+    {
+        "modern, minimalist",
+        "luxury, marble",
+        "scandinavian, light wood",
+        "industrial, matte black"
+    };
+
+    // Local copy bound to the input so Blazor's diff updates the DOM `value`
+    // even when StyleHints is changed indirectly by a preset click. Keeping
+    // the parameter as the single source of truth prevented the input from
+    // refreshing when the user clicked a chip - this fixes that.
+    private string StyleHintsText = string.Empty;
+
+    // Which presets are currently in the StyleHints string. Renders the
+    // 'active' chip ring and lets users TOGGLE multiple presets at once
+    // (luxury + scandinavian, etc) instead of replacing on every click.
+    private HashSet<string> SelectedPresets = new(StringComparer.OrdinalIgnoreCase);
+
+    protected override void OnParametersSet()
+    {
+        // Sync local input field whenever the parent updates StyleHints
+        // (preset click, programmatic update, etc).
+        if (!string.Equals(StyleHintsText, StyleHints, StringComparison.Ordinal))
+        {
+            StyleHintsText = StyleHints ?? string.Empty;
+        }
+        // Recompute which presets are 'active' based on the current text.
+        SelectedPresets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in Presets)
+        {
+            if (ContainsAllTokens(StyleHintsText, p)) SelectedPresets.Add(p);
+        }
+    }
+
+    private Task OnJaguarChanged(ChangeEventArgs e) => UseJaguarChanged.InvokeAsync(e.Value is bool b && b);
+    private Task OnParrywareChanged(ChangeEventArgs e) => UseParrywareChanged.InvokeAsync(e.Value is bool b && b);
+
+    private async Task OnPreset(string preset)
+    {
+        // Toggle: if every token of `preset` is already present, remove them; else add them.
+        var current = TokenizeStyles(StyleHintsText);
+        var presetTokens = TokenizeStyles(preset);
+        var allPresent = presetTokens.All(pt => current.Contains(pt, StringComparer.OrdinalIgnoreCase));
+        if (allPresent)
+        {
+            current = current.Where(t => !presetTokens.Contains(t, StringComparer.OrdinalIgnoreCase)).ToList();
+        }
+        else
+        {
+            foreach (var pt in presetTokens)
+            {
+                if (!current.Contains(pt, StringComparer.OrdinalIgnoreCase)) current.Add(pt);
+            }
+        }
+        var newText = string.Join(", ", current);
+        StyleHintsText = newText;
+        await StyleHintsChanged.InvokeAsync(newText);
+    }
+
+    private Task OnStyleTextChanged() => StyleHintsChanged.InvokeAsync(StyleHintsText);
+
+    private static List<string> TokenizeStyles(string s) =>
+        (s ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(t => t.Length > 0)
+            .ToList();
+
+    private static bool ContainsAllTokens(string text, string preset)
+    {
+        var tt = TokenizeStyles(text);
+        var pt = TokenizeStyles(preset);
+        return pt.All(p => tt.Contains(p, StringComparer.OrdinalIgnoreCase));
+    }
+}
