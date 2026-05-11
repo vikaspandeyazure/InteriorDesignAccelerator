@@ -1,0 +1,102 @@
+name: Bug report
+description: Report a defect in the Interior Design Accelerator
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug! Please fill in as much detail as you can — it makes triage dramatically faster.
+        **Do NOT report security issues here.** See [`SECURITY.md`](../blob/master/SECURITY.md).
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I am NOT reporting a security vulnerability (those go via SECURITY.md).
+          required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences describing the bug.
+      placeholder: e.g. "Catalog page-rendered proxy returns 502 when the brand contains an uppercase letter."
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal, ordered steps. Include exact commands, URLs, and the brief you typed if relevant.
+      placeholder: |
+        1. Run `dotnet run --project ./src/Orchestrator.Api/Orchestrator.Api.csproj`
+        2. POST /api/design/generate/stream with body { ... }
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include error messages, stack traces, or HTTP responses (redact secrets).
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      multiple: true
+      options:
+        - Orchestrator.Api
+        - Web.Ui (Blazor Server)
+        - Shared.Contracts
+        - CatalogExtractor
+        - infra/modules (Bicep)
+        - infra/scripts/deploy.ps1
+        - GitHub Actions / CI
+        - Docs
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: commit
+    attributes:
+      label: Commit SHA or release tag
+      placeholder: e.g. master @ a1b2c3d
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, .NET SDK version, PowerShell version, Azure region (if deployed).
+      placeholder: |
+        - OS: Windows 11 23H2
+        - dotnet --version: 8.0.x
+        - pwsh --version: 7.4.x
+        - Azure region: swedencentral
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste logs, agent traces, or screenshots. Redact subscription IDs, keys, and tokens.
+      render: shell

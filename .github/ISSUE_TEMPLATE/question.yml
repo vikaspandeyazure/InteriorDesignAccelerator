@@ -1,0 +1,35 @@
+name: Question
+description: Ask a question about how the accelerator works or how to deploy it
+title: "[Question]: "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before opening a question issue, please check:
+        - [`README.md`](../blob/master/README.md)
+        - [`docs/ARCHITECTURE.md`](../blob/master/docs/ARCHITECTURE.md)
+        - [`docs/DEPLOYMENT.md`](../blob/master/docs/DEPLOYMENT.md)
+        - [`docs/FLOW.md`](../blob/master/docs/FLOW.md)
+        - [`SUPPORT.md`](../blob/master/SUPPORT.md)
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+    validations:
+      required: true
+
+  - type: textarea
+    id: tried
+    attributes:
+      label: What have you already tried or read?
+      description: Link the docs / code paths you have already looked at.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Commit SHA, Azure region, .NET SDK, etc., if relevant.

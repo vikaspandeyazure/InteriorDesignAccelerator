@@ -1,0 +1,60 @@
+name: Feature request
+description: Suggest an enhancement to the Interior Design Accelerator
+title: "[Feat]: "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This repo is a **reference implementation**, so we prioritize features that improve learning value, security, or deploy reliability over scope expansion. Please keep that in mind.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched existing issues and discussions for a similar request.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What real-world scenario is awkward or impossible today?
+      placeholder: e.g. "Designers cannot pin a preferred SKU and re-render only the narrative."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How would you like it to work? Include API/UI shape if possible.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component most affected
+      options:
+        - Orchestrator.Api
+        - Web.Ui (Blazor Server)
+        - Shared.Contracts
+        - CatalogExtractor
+        - infra (Bicep / deploy.ps1)
+        - Docs
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Links, screenshots, mockups, related Foundry / Azure docs.

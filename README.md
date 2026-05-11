@@ -1,6 +1,6 @@
 ﻿# Interior Design Accelerator — Modern Bathroom
 
-> A reference implementation that pairs **Microsoft Foundry** (Hosted Agents + MAI-Image-2 + gpt-4.1-mini), **Azure AI Search** (per-brand catalog indexes), **Document Intelligence Layout**, **Azure Container Apps**, **Azure App Service (Blazor Server)** and **Azure API Management** into an end-to-end content-generation accelerator for interior designers.
+> A reference implementation that pairs **Microsoft Foundry** (gpt-4.1-mini + MAI-Image-2), **Azure AI Search** (per-brand catalog indexes), **Document Intelligence Layout**, **Azure Container Apps**, **Azure App Service (Blazor Server)** and **Azure API Management** into an end-to-end content-generation accelerator for interior designers.
 
 <p align="center">
   <a href="#"><img alt=".NET 8" src="https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet&logoColor=white"></a>
@@ -37,7 +37,7 @@ The narrative is **honest about its boundaries**: MAI provides *inspiration*; Fo
 |---|---|
 | Real product grounding (no hallucinations) | **Azure AI Search** with per-brand semantic indexes, seeded from PDFs via **Document Intelligence Layout** |
 | Photoreal visual interpretation | **MAI-Image-2** (Microsoft-published Foundry image model) |
-| Re-ranking and concise narratives | **gpt-4.1-mini** Foundry chat agent |
+| Re-ranking and concise narratives | **gpt-4.1-mini** chat model on Foundry |
 | Multi-agent orchestration | **Microsoft Agent Framework** style pipeline (Plan -> Retrieve -> Compose -> Render) |
 | Honest UI separation | "MAI for inspiration / Foundry IQ for shoppable discovery" |
 | Same-origin browser fetch | Web.Ui proxies catalog page rasters so the browser never has to carry an APIM key |
@@ -54,14 +54,10 @@ flowchart LR
     WebUi -->|HttpClient + APIM key| APIM[Azure API Management Consumption SKU]
     APIM --> Orch[Orchestrator API ASP.NET 8 Minimal API Container Apps]
     subgraph Foundry["Microsoft Foundry Project"]
-        Chat[chat-agent gpt-4.1-mini]
-        Search[catalog-search-agent re-ranker]
-        ImgGen[image-gen-agent prompt refiner]
+        Chat[gpt-4.1-mini chat model]
         MAI[(MAI-Image-2 text-to-image)]
     end
-    Orch -->|Responses API| Chat
-    Orch -->|Responses API| Search
-    Orch -->|Responses API| ImgGen
+    Orch -->|Responses API plan / re-rank / compose| Chat
     Orch -->|/mai/v1/images/generations| MAI
     Search -.-> AISearch[(Azure AI Search jaguar-catalog parryware-catalog)]
     Orch -->|MI authenticated| AISearch
@@ -81,10 +77,8 @@ sequenceDiagram
     participant W as Web.Ui (Blazor Server)
     participant A as APIM (Consumption)
     participant O as Orchestrator API
-    participant C as Foundry chat-agent
+    participant C as gpt-4.1-mini (Foundry)
     participant S as AI Search (jaguar+parryware)
-    participant CS as Foundry catalog-search-agent
-    participant IG as Foundry image-gen-agent
     participant M as MAI-Image-2
 
     U->>W: POST /api/design/generate/stream (SSE)
@@ -99,8 +93,8 @@ sequenceDiagram
     Note over O: 2) Retrieve
     O->>S: semantic search (per brand)
     S-->>O: candidates (id, brand, page, score)
-    O->>CS: re-rank / dedup top 8
-    CS-->>O: ordered ids
+    O->>C: re-rank / dedup top 8
+    C-->>O: ordered ids
     O-->>W: event trace (retrieve)
 
     Note over O: 3) Compose
@@ -109,8 +103,8 @@ sequenceDiagram
     O-->>W: event trace (compose)
 
     Note over O: 4) Render
-    O->>IG: refine prompt for MAI
-    IG-->>O: refined prompt
+    O->>C: refine prompt for MAI
+    C-->>O: refined prompt
     O->>M: POST mai v1 images generations (1024x1024)
     M-->>O: PNG bytes
     O-->>W: event done (DesignResponse JSON + base64)
@@ -246,16 +240,16 @@ Total idle cost is typically **<US$5/day** in `swedencentral`. The bulk of varia
 The orchestrator emits one SSE `event: trace` per step. A typical successful turn:
 
 ```
-STARTED         orchestrator                  brief='Design a luxury marble ensuite...', brands=[Jaguar,Parryware]
-PLAN-BEGIN      foundry-chat-agent            rewriting brief into search query...
-PLAN            foundry-chat-agent            luxury marble ensuite Jaguar brushed gold single-lever basin mixer ...
-RETRIEVE-BEGIN  foundry-catalog-search-agent  querying brand catalog indexes...
-RETRIEVE        foundry-catalog-search-agent  4 products: jaguar/Jaguar Laguna Collection (p.1); parryware/... (p.5)
-COMPOSE-BEGIN   foundry-chat-agent            writing narrative + image prompt...
-COMPOSE         foundry-chat-agent            Photo-realistic modern Scandinavian luxury ensuite bathroom...
-RENDER-BEGIN    foundry-image-gen-agent       calling MAI image model (this can take 20-40s)...
-RENDER          foundry-image-gen-agent       1010 KB image
-DONE            orchestrator                  58777 ms
+STARTED         orchestrator       brief='Design a luxury marble ensuite...', brands=[Jaguar,Parryware]
+PLAN-BEGIN      chat               rewriting brief into search query...
+PLAN            chat               luxury marble ensuite Jaguar brushed gold single-lever basin mixer ...
+RETRIEVE-BEGIN  catalog-search     querying brand catalog indexes...
+RETRIEVE        catalog-search     4 products: jaguar/Jaguar Laguna Collection (p.1); parryware/... (p.5)
+COMPOSE-BEGIN   chat               writing narrative + image prompt...
+COMPOSE         chat               Photo-realistic modern Scandinavian luxury ensuite bathroom...
+RENDER-BEGIN    image-gen          calling MAI image model (this can take 20-40s)...
+RENDER          image-gen          1010 KB image
+DONE            orchestrator       58777 ms
 ```
 
 ---
@@ -280,7 +274,7 @@ The names *Jaguar* and *Parryware* are trademarks of their respective owners and
 
 ## Acknowledgements
 
-- **Microsoft Foundry** team for the Hosted Agents + MAI image surface
+- **Microsoft Foundry** team for the Agents + MAI image surface
 - **Azure AI Search** team for the semantic ranker
 - **PDFium / PDFtoImage / PdfPig** for the PDF tooling that makes the per-page renderer possible
 - **Blazor** + **Minimal APIs** for an extremely productive .NET 8 dev loop

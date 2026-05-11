@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/vikaspandeyazure/InteriorDesignAccelerator/security/advisories/new
+    about: Please report security issues privately via a GitHub security advisory. Do NOT open a public issue.
+  - name: Deployment / how-to questions
+    url: https://github.com/vikaspandeyazure/InteriorDesignAccelerator/blob/master/SUPPORT.md
+    about: See SUPPORT.md for where to ask deployment, configuration, and usage questions.
