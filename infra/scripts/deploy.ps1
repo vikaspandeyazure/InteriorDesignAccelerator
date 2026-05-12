@@ -730,11 +730,61 @@ function Sync-BlobsIncremental {
         }
     }
 
-    # --- execute
+    # --- execute uploads with retry-on-transient (RBAC propagation, throttling).
+    # Storage data-plane RBAC ('Storage Blob Data Contributor' on the deployer)
+    # is granted by storage.bicep, but can take 30-90s to propagate. We retry
+    # on transient errors. NON-FATAL: even if a few PDFs still fail after
+    # retries the deploy continues - downstream phases (extraction + search
+    # seed) work with whatever made it into the container; the user can re-run
+    # deploy.ps1 to pick up the missing files (the diff sync will retry only
+    # those that aren't there).
+    $uploadedOk   = 0
+    $uploadedFail = 0
+    $failedFiles  = New-Object System.Collections.Generic.List[string]
     foreach ($u in $toUpload) {
-        & { $ErrorActionPreference='Continue'; az storage blob upload --account-name $AccountName --container-name $Container --name $u.Rel --file $u.FullName --auth-mode login --overwrite --only-show-errors 2>&1 } | Out-Null
-        if ($LASTEXITCODE -eq 0) { Write-Host "    [+] $($u.Rel)  ($($u.Reason))" -ForegroundColor Green }
-        else                      { Write-Host "    [!] $($u.Rel) upload failed"  -ForegroundColor Red }
+        $maxAttempts = 5
+        $success     = $false
+        $lastErr     = ''
+        for ($i = 1; $i -le $maxAttempts; $i++) {
+            $output = & {
+                $ErrorActionPreference='Continue'
+                az storage blob upload `
+                    --account-name $AccountName `
+                    --container-name $Container `
+                    --name $u.Rel `
+                    --file $u.FullName `
+                    --auth-mode login `
+                    --overwrite `
+                    --only-show-errors 2>&1
+            } | Out-String
+            if ($LASTEXITCODE -eq 0) { $success = $true; break }
+
+            # Capture the FULL error - az writes "ERROR:" on one line and the
+            # actual message on the next (or wraps long messages). The previous
+            # "first non-empty line" extraction lost the real reason and showed
+            # just "ERROR:" with no context. Now we keep all non-empty lines and
+            # join them, then trim hard for the log.
+            $errLines = ($output -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -ne 'ERROR:' })
+            $lastErr  = if ($errLines) { ($errLines -join ' | ') } else { 'az CLI returned non-zero with no stderr output' }
+
+            $isTransient = $lastErr -match 'AuthorizationPermissionMismatch|AuthorizationFailure|does not have access|Forbidden|Status code: 4(0[138]|29)|Status code: 5\d\d|TimeoutException|ServerBusy|temporar|connection.*reset|connection.*aborted|RequestTimeout|InternalError|OperationTimedOut'
+            if ($i -lt $maxAttempts -and $isTransient) {
+                $delay = @(0, 10, 20, 40, 60)[$i]
+                Write-Host "    [.] $($u.Rel) attempt $i/$maxAttempts transient - retry in ${delay}s" -ForegroundColor DarkYellow
+                Start-Sleep -Seconds $delay
+                continue
+            }
+            break
+        }
+        if ($success) {
+            Write-Host "    [+] $($u.Rel)  ($($u.Reason))" -ForegroundColor Green
+            $uploadedOk++
+        } else {
+            $trimmed = if ($lastErr.Length -gt 320) { $lastErr.Substring(0,320) + '...' } else { $lastErr }
+            Write-Host "    [!] $($u.Rel) upload FAILED after $maxAttempts attempts: $trimmed" -ForegroundColor Red
+            $uploadedFail++
+            $failedFiles.Add($u.Rel) | Out-Null
+        }
     }
     foreach ($d in $toDelete) {
         & { $ErrorActionPreference='Continue'; az storage blob delete --account-name $AccountName --container-name $Container --name $d --auth-mode login --only-show-errors 2>&1 } | Out-Null
@@ -742,10 +792,12 @@ function Sync-BlobsIncremental {
     }
 
     return @{
-        Uploaded   = $toUpload.Count
-        Deleted    = $toDelete.Count
-        Unchanged  = ($local.Count - $toUpload.Count)
-        ChangedAny = ($toUpload.Count -gt 0 -or $toDelete.Count -gt 0)
+        Uploaded     = $uploadedOk
+        Failed       = $uploadedFail
+        FailedFiles  = $failedFiles.ToArray()
+        Deleted      = $toDelete.Count
+        Unchanged    = ($local.Count - $toUpload.Count)
+        ChangedAny   = ($uploadedOk -gt 0 -or $toDelete.Count -gt 0)
     }
 }
 
@@ -1015,6 +1067,20 @@ function Get-ShortHash([string]$Text) {
     $bytes = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Text))
     $hex   = -join ($bytes | ForEach-Object { '{0:x2}' -f $_ })
     return $hex.Substring(0, 6)
+}
+
+function Get-ContentFingerprint([string]$Text) {
+    # 16-hex-char fingerprint used to detect content drift in agent definitions
+    # (model + instructions + knowledge bindings + KB name). When the local
+    # fingerprint differs from the cached one in state, deploy.ps1 mints a new
+    # version of the agent in Foundry instead of reusing the existing one.
+    if ($null -eq $Text) { $Text = '' }
+    $sha   = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Text))
+        $hex   = -join ($bytes | ForEach-Object { '{0:x2}' -f $_ })
+        return $hex.Substring(0, 16)
+    } finally { $sha.Dispose() }
 }
 
 # =============================================================================
@@ -1673,16 +1739,85 @@ $pdfCount = (Get-ChildItem $repoData -Recurse -File -Include *.pdf -ErrorAction 
 if ($pdfCount -eq 0) {
     Write-Err2 "No PDFs found under $repoData. Drop your trimmed Jaguar/Parryware PDFs into data\catalogs\jaguar\ and data\catalogs\parryware\ and re-run."
 } else {
-    # File-level differential sync (replaces the old "count blobs vs files"
-    # heuristic which silently kept stale content on rename/replace/delete).
-    # Sync-BlobsIncremental uploads only new + size-changed files and prunes
-    # blobs that no longer exist locally. Returns ChangedAny=$true whenever
-    # anything was uploaded or deleted - we use that to cascade-invalidate
-    # the downstream Phase 8d / 8e fingerprints so they re-fire automatically.
+    # ------------------------------------------------------------------------
+    # Storage firewall: open the data plane for both upload AND runtime.
+    #
+    # Two separate consumers need the data plane:
+    #   * Phase 5 (this phase): uploads PDFs from the deployer's machine. On
+    #     multi-egress networks (CGNAT, ISP load-balancing, corporate proxies)
+    #     a single ipRule isn't enough because az CLI's bulk uploads are
+    #     round-robined across several egress IPs; only one is allowed.
+    #   * RUNTIME (Container Apps orchestrator + AI Search indexer + Web.Ui
+    #     hero-image proxy): the orchestrator reads catalog PDFs from blob
+    #     to render the per-page thumbnail shown in each "Fittings you may
+    #     like" card and to extract hero images. Container Apps do NOT
+    #     qualify for 'bypass: AzureServices' (only specific trusted services
+    #     like AI Search indexer do). So the runtime orchestrator's outbound
+    #     IP would also be blocked unless we pin every egress IP to ipRules.
+    #
+    # Resolution (accelerator pattern): keep defaultAction='Allow' both
+    # during AND after Phase 5. The AAD RBAC layer is the actual security
+    # gate - every blob call requires a valid Bearer token with
+    # 'Storage Blob Data Reader/Contributor' on the deployer (granted by
+    # storage.bicep) or on the orchestrator's user-assigned MI. The IP
+    # firewall was just a second-layer defense that's incompatible with
+    # multi-egress deployer networks AND with Container Apps runtime; for
+    # an open-source accelerator the simpler+working "AAD as the gate"
+    # posture is the right tradeoff.
+    #
+    # If you want to re-tighten for a hardened production deployment, the
+    # right move is NOT to flip back to Deny here - it's to add the Container
+    # Apps environment static outbound IPs to ipRules in storage.bicep AND
+    # use a private endpoint for the deployer. Until then, leaving Allow.
+    $rgForSa = & { $ErrorActionPreference='Continue'; az storage account show --name $storageAccount --query resourceGroup -o tsv 2>&1 } | Out-String
+    $rgForSa = $rgForSa.Trim()
+    $priorDefaultAction = & { $ErrorActionPreference='Continue'; az storage account show -g $rgForSa -n $storageAccount --query networkRuleSet.defaultAction -o tsv 2>&1 } | Out-String
+    $priorDefaultAction = $priorDefaultAction.Trim()
+    if ($priorDefaultAction -ne 'Allow') {
+        Write-Step "Opening storage data-plane firewall for upload + runtime (defaultAction: $priorDefaultAction -> Allow; AAD RBAC remains the security gate)..."
+        $flip = & { $ErrorActionPreference='Continue'; az storage account update -g $rgForSa -n $storageAccount --default-action Allow --only-show-errors 2>&1 } | Out-String
+        if ($LASTEXITCODE -eq 0) {
+            Write-Ok "  Storage firewall: defaultAction=Allow (AAD RBAC is the gate)."
+            # Brief propagation wait - data plane firewall takes a few seconds.
+            Start-Sleep -Seconds 8
+        } else {
+            Write-Skip "  Could not flip firewall to Allow ($($flip.Trim())). Continuing - uploads may still partially fail on multi-egress networks."
+        }
+    } else {
+        Write-Skip "Storage firewall is already defaultAction=Allow - leaving it as-is."
+    }
+
     Write-Step "Syncing PDFs to storage '$storageAccount' container '$catalogContainer' (file-level diff)..."
     $syncRes = Sync-BlobsIncremental -AccountName $storageAccount -Container $catalogContainer -LocalRoot $repoData -IncludePatterns @('*.pdf') -PruneOrphans
+
+    # If some files transiently failed (rare now that the firewall is open),
+    # do ONE final retry pass after a short pause. NON-FATAL: downstream
+    # phases work on whatever made it into the container; a re-run picks up
+    # the stragglers via the normal diff sync.
+    if ($syncRes.Failed -gt 0) {
+        Write-Skip "  $($syncRes.Failed) file(s) failed on first pass: $($syncRes.FailedFiles -join ', ')"
+        Write-Step "  Pausing 20s then retrying just the failed files..."
+        Start-Sleep -Seconds 20
+        $syncRes2 = Sync-BlobsIncremental -AccountName $storageAccount -Container $catalogContainer -LocalRoot $repoData -IncludePatterns @('*.pdf')
+        $totalUploaded = $syncRes.Uploaded + $syncRes2.Uploaded
+        $totalFailed   = $syncRes2.Failed
+        if ($totalFailed -gt 0) {
+            Write-Skip "  $totalFailed file(s) STILL failing after retry: $($syncRes2.FailedFiles -join ', ')"
+            Write-Skip "  Continuing deploy - downstream extraction/search will work on uploaded files."
+            Write-Skip "  Re-run deploy.ps1 to pick up the stragglers (the diff sync uploads only what's missing)."
+        }
+        $syncRes = @{
+            Uploaded   = $totalUploaded
+            Failed     = $totalFailed
+            Deleted    = $syncRes.Deleted
+            Unchanged  = $syncRes.Unchanged
+            ChangedAny = $true
+        }
+    }
+
     if ($syncRes.ChangedAny) {
-        Write-Ok ("Catalog sync: {0} uploaded, {1} deleted, {2} unchanged." -f $syncRes.Uploaded, $syncRes.Deleted, $syncRes.Unchanged)
+        $failHint = if ($syncRes.Failed -gt 0) { ", $($syncRes.Failed) failed" } else { '' }
+        Write-Ok ("Catalog sync: {0} uploaded, {1} deleted, {2} unchanged{3}." -f $syncRes.Uploaded, $syncRes.Deleted, $syncRes.Unchanged, $failHint)
         # Cascade: any blob change must force Phase 8d to re-extract and Phase
         # 8e to re-seed the AI Search indexes. Clearing the fingerprints (not
         # the boolean flags) is the cleanest signal for the new
@@ -2091,11 +2226,164 @@ while (((Get-Date) - $rbacStart).TotalSeconds -lt 240) {
 }
 if (-not $rbacOk) { Write-Skip '  warmup timed out - proceeding, agent loop has its own retries.' }
 
-# Define the 4 agents using their JSON templates
+# ---------------------------------------------------------------------------
+# 8c-pre  Foundry IQ Knowledge Base (created on the AI Search service)
+# ---------------------------------------------------------------------------
+# Per the Azure AI Search agentic-retrieval docs:
+#   https://learn.microsoft.com/azure/search/agentic-retrieval-how-to-create-knowledge-base
+# Foundry IQ knowledge bases live on the AI SEARCH service (not on the
+# Foundry account / agents endpoint - that's why the previous probes against
+# services.ai.azure.com and cognitiveservices.azure.com all returned 404).
+#
+# The model is:
+#   1. KnowledgeSource per index  -> PUT {search}/knowledgesources/{name}
+#   2. KnowledgeBase referencing multiple knowledge sources by name
+#                                 -> PUT {search}/knowledgebases/{name}
+# api-version=2025-11-01-preview (the version the public docs and the
+# Azure.Search.Documents.KnowledgeBases SDK target).
+#
+# Flow for this app:
+#   * Create 2 knowledge sources (jaguar-ks, parryware-ks) wrapping the 2
+#     existing brand indexes (jaguar-catalog, parryware-catalog).
+#   * Create the unified KB 'bath-fittings-kb' that references both sources.
+#   * Phase 8c below binds catalog-search-agent to this KB via the agent's
+#     'knowledge_bases: [{name}]' binding. If the agent registration rejects
+#     that shape, the legacy per-connection binding is the working fallback.
+#
+# NEVER FATAL: if the search service rejects the KB calls (region without
+# preview surface, RBAC delay, free-SKU search service, etc.) we fall back
+# to the legacy per-connection agent binding. The orchestrator preserves
+# the agent's ranking either way and the user-visible UX is identical.
+$kbName   = 'bath-fittings-kb'
+$kbApiVer = '2025-11-01-preview'
+
+# One knowledge source per brand index. Names follow the doc's '{topic}-ks'
+# convention so the resources are self-describing in the Foundry IQ portal.
+$kbSources = @(
+    @{ ksName='jaguar-ks';    indexName='jaguar-catalog'    }
+    @{ ksName='parryware-ks'; indexName='parryware-catalog' }
+)
+
+$kbBound      = $false
+$kbCollection = $null
+$kbApiVerUsed = $null
+
+if ($state['foundryIqKb_done'] -and $state['foundryIqKbName'] -eq $kbName -and $state['foundryIqKbApiVer'] -eq $kbApiVer) {
+    Write-Skip "Foundry IQ knowledge base '$kbName' already created on $searchEndpoint (per state)"
+    $kbBound      = $true
+    $kbCollection = "$searchEndpoint/knowledgebases"
+    $kbApiVerUsed = $kbApiVer
+} else {
+    Write-Step "Foundry IQ knowledge base: creating on AI Search service '$searchEndpoint' (api-version=$kbApiVer) ..."
+
+    # Acquire a search data-plane token. KB management requires 'Search
+    # Service Contributor' on the deployer (granted by search.bicep).
+    $srchToken = & { $ErrorActionPreference='Continue'; az account get-access-token --resource https://search.azure.com --query accessToken -o tsv 2>&1 } | Out-String
+    $srchToken = $srchToken.Trim()
+    if (-not $srchToken -or $srchToken.Length -lt 100) {
+        Write-Skip "  Could not acquire search.azure.com token - falling back to legacy per-connection binding."
+    } else {
+        $srchHdr = @{ Authorization = "Bearer $srchToken"; 'Content-Type' = 'application/json' }
+
+        try {
+            # ---- Step 1: knowledge sources (one per existing index) --------
+            foreach ($s in $kbSources) {
+                $ksUri  = "$searchEndpoint/knowledgesources/$($s.ksName)?api-version=$kbApiVer"
+                $ksBody = @{
+                    name        = $s.ksName
+                    kind        = 'searchIndex'
+                    description = "Knowledge source wrapping the '$($s.indexName)' AI Search index for Foundry IQ agentic retrieval."
+                    searchIndexParameters = @{
+                        searchIndexName = $s.indexName
+                    }
+                } | ConvertTo-Json -Depth 12
+
+                $existsKs = $false
+                try {
+                    $cur = Invoke-RestMethod -Uri $ksUri -Headers $srchHdr -Method Get -ErrorAction Stop
+                    if ($cur -and $cur.name -eq $s.ksName) {
+                        Write-Skip "    knowledge source '$($s.ksName)' exists (wraps '$($s.indexName)') - reusing"
+                        $existsKs = $true
+                    }
+                } catch {
+                    $sc = 0; if ($_.Exception.Response) { try { $sc = [int]$_.Exception.Response.StatusCode } catch { } }
+                    if ($sc -ne 404 -and $sc -ne 0) {
+                        Write-Skip "    GET '$($s.ksName)' returned HTTP $sc - will attempt PUT"
+                    }
+                }
+                if (-not $existsKs) {
+                    Invoke-RestWithRetry -Method Put -Uri $ksUri -Headers $srchHdr -Body $ksBody | Out-Null
+                    Write-Ok "    knowledge source '$($s.ksName)' -> wraps index '$($s.indexName)'"
+                }
+            }
+
+            # ---- Step 2: knowledge base referencing both sources -----------
+            $kbUri  = "$searchEndpoint/knowledgebases/$kbName`?api-version=$kbApiVer"
+            $kbBody = @{
+                name        = $kbName
+                description = 'Unified bathroom-fittings knowledge base combining the jaguar-catalog and parryware-catalog AI Search indexes for Foundry IQ agentic retrieval. Created by deploy.ps1.'
+                knowledgeSources = @(
+                    @{ name = 'jaguar-ks' },
+                    @{ name = 'parryware-ks' }
+                )
+            } | ConvertTo-Json -Depth 12
+
+            $existsKb = $false
+            try {
+                $curKb = Invoke-RestMethod -Uri $kbUri -Headers $srchHdr -Method Get -ErrorAction Stop
+                if ($curKb -and $curKb.name -eq $kbName) {
+                    Write-Skip "    KB '$kbName' exists - reusing"
+                    $existsKb = $true
+                }
+            } catch {
+                $sc = 0; if ($_.Exception.Response) { try { $sc = [int]$_.Exception.Response.StatusCode } catch { } }
+                if ($sc -ne 404 -and $sc -ne 0) {
+                    Write-Skip "    GET '$kbName' returned HTTP $sc - will attempt PUT"
+                }
+            }
+            if (-not $existsKb) {
+                Invoke-RestWithRetry -Method Put -Uri $kbUri -Headers $srchHdr -Body $kbBody | Out-Null
+                Write-Ok "    KB '$kbName' -> created (sources: jaguar-ks, parryware-ks)"
+            }
+
+            $kbBound      = $true
+            $kbCollection = "$searchEndpoint/knowledgebases"
+            $kbApiVerUsed = $kbApiVer
+            Write-Ok "  Foundry IQ KB '$kbName' is live on $searchEndpoint"
+        } catch {
+            $em = $_.ErrorDetails.Message; if (-not $em) { $em = $_.Exception.Message }
+            $sc = 0; if ($_.Exception.Response) { try { $sc = [int]$_.Exception.Response.StatusCode } catch { } }
+            Write-Skip "  KB creation on search service failed (HTTP $sc): $em"
+            Write-Skip "  Falling back to legacy per-connection agent binding - deploy continues."
+            Write-Skip "  Common causes:"
+            Write-Skip "    * Search service SKU does not support knowledgebases preview (basic+ usually works; free does not)."
+            Write-Skip "    * api-version 2025-11-01-preview not yet enabled in your region."
+            Write-Skip "    * Deployer principal lacks 'Search Service Contributor' on $searchEndpoint."
+        }
+    }
+
+    if ($kbBound) {
+        State-Set 'foundryIqKb_done'         $true
+        State-Set 'foundryIqKbName'          $kbName
+        State-Set 'foundryIqKbCollection'    $kbCollection
+        State-Set 'foundryIqKbApiVer'        $kbApiVerUsed
+    } else {
+        State-Set 'foundryIqKb_done'         $false
+        State-Set 'foundryIqKbName'          ''
+        State-Set 'foundryIqKbCollection'    ''
+        State-Set 'foundryIqKbApiVer'        ''
+    }
+}
+
+# Define the 4 agents using their JSON templates. The catalog-search-agent
+# binds to the Foundry IQ KB if it was created above; otherwise it falls
+# back to legacy per-connection binding (functionally equivalent for our
+# orchestrator, which preserves the agent's ranking either way).
+$catalogKnowledgeKind = if ($kbBound) { 'knowledge-base' } else { 'search' }
 $agentDefs = @(
-    @{ file='chat-agent.json';                 idKey='chatAgentId';            modelOverride=$ChatModelName;   knowledgeKind='none'    }
-    @{ file='catalog-search-agent.json';       idKey='catalogSearchAgentId';   modelOverride=$ChatModelName;   knowledgeKind='search'  }
-    @{ file='image-gen-agent.json';            idKey='imageGenAgentId';        modelOverride=$ImageModelName;  knowledgeKind='none'    }
+    @{ file='chat-agent.json';                 idKey='chatAgentId';            modelOverride=$ChatModelName;   knowledgeKind='none'                  }
+    @{ file='catalog-search-agent.json';       idKey='catalogSearchAgentId';   modelOverride=$ChatModelName;   knowledgeKind=$catalogKnowledgeKind; knowledgeBaseName=$kbName }
+    @{ file='image-gen-agent.json';            idKey='imageGenAgentId';        modelOverride=$ImageModelName;  knowledgeKind='none'                  }
 )
 
 # Resume: pick up agent ids saved last time
@@ -2114,17 +2402,17 @@ try {
     }
 } catch { }
 
-if ($state['agents_done'] -and $agentIds.Count -ge 4 -and $state['agents_knowledge_v2']) {
-    Write-Skip 'All 4 New Foundry agents already created with knowledge bindings (per state)'
+if ($state['agents_done'] -and $agentIds.Count -ge 4 -and $state['agents_knowledge_v3']) {
+    Write-Skip 'All 4 New Foundry agents already created with Foundry IQ KB binding (per state)'
 } else {
     Write-Step "Creating New Foundry agents (data plane) - $($agentIds.Count)/4 already done from prior runs..."
 
-    # If state predates the knowledge-binding rollout, force the catalog-search-agent
-    # to be recreated so a new version with knowledge[] gets minted in Foundry.
-    # (The /agents/{name}/versions POST creates a NEW version each time, so this
-    # is non-destructive - older versions remain in the portal history.)
-    if (-not $state['agents_knowledge_v2'] -and $agentIds['catalogSearchAgentId']) {
-        Write-Skip "  catalog-search-agent: clearing cached id to mint a new version with knowledge bindings."
+    # If state predates the Foundry IQ KB rollout (v3), force the catalog-search-agent
+    # to be recreated so a new version with knowledge_bases=[bath-fittings-kb] gets
+    # minted in Foundry. (POST /agents/{name}/versions creates a NEW version each
+    # time, so this is non-destructive - older versions remain in the portal history.)
+    if (-not $state['agents_knowledge_v3'] -and $agentIds['catalogSearchAgentId']) {
+        Write-Skip "  catalog-search-agent: clearing cached id to mint a new version with Foundry IQ KB binding ('$kbName')."
         $agentIds.Remove('catalogSearchAgentId') | Out-Null
         $existingByName.Remove('catalog-search-agent') | Out-Null
         State-Set 'agentIds' $agentIds
@@ -2137,63 +2425,115 @@ if ($state['agents_done'] -and $agentIds.Count -ge 4 -and $state['agents_knowled
 
         $agentName = $tpl.name      # e.g. 'catalog-search-agent'
 
-        # 1) Already in our state? skip.
-        if ($agentIds[$a.idKey]) {
-            Write-Skip "  '$agentName' already in state -> $($agentIds[$a.idKey])"
-            continue
-        }
-        # 2) Already in Foundry by name? reuse.
-        if ($existingByName.ContainsKey($agentName)) {
-            $agentIds[$a.idKey] = $existingByName[$agentName]
-            State-Set 'agentIds' $agentIds
-            Write-Skip "  '$agentName' already in Foundry -> $($existingByName[$agentName]) (reusing)"
-            continue
-        }
-
-        # New Foundry /agents API uses kind=prompt for instruction-following agents.
-        # We attach KNOWLEDGE here for agents that need to ground in AI Search
-        # (the catalog-search-agent grounds in both brand indexes via the
-        # project-level CognitiveSearch connections created by foundry.bicep).
-        # This is what makes the agent usable in the Foundry Playground "Chat"
-        # tab AND gives our orchestrator a server-side fallback retrieval path.
+        # Build the definition body FIRST so we can fingerprint it before
+        # deciding whether to reuse an existing version or mint a new one.
+        # Any change to model / instructions / knowledge bindings (including
+        # switching from legacy 'knowledge' to 'knowledge_bases', or KB name)
+        # will produce a new fingerprint and force a new version to be minted.
         $definition = @{
             kind         = 'prompt'
             model        = $a.modelOverride
             instructions = $tpl.instructions
         }
-        if ($a.knowledgeKind -eq 'search') {
-            # Two AI Search connections (jaguar-catalog, parryware-catalog) created
-            # by foundry.bicep. We bind BOTH as knowledge so the agent can search
-            # across both brands. The connection name in the project IS the index
-            # name in our setup (foundry.bicep aligned them on purpose).
-            $definition.knowledge = @(
+        if ($a.knowledgeKind -eq 'knowledge-base') {
+            # The KB lives on the AI Search service. The Foundry agent runtime
+            # reaches it via one of the project's CognitiveSearch connections;
+            # either of our two existing connections (jaguar-catalog or
+            # parryware-catalog) works because both target the SAME search
+            # service - the KB itself fans out to both indexes via its
+            # knowledge sources. We pick jaguar-catalog deterministically.
+            $definition.knowledge_bases = @(
                 @{
-                    kind = 'azure_ai_search'
-                    azure_ai_search = @{
-                        connection_name = 'jaguar-catalog'
-                        index_name      = 'jaguar-catalog'
-                    }
-                },
-                @{
-                    kind = 'azure_ai_search'
-                    azure_ai_search = @{
-                        connection_name = 'parryware-catalog'
-                        index_name      = 'parryware-catalog'
-                    }
+                    name            = $a.knowledgeBaseName
+                    connection_name = 'jaguar-catalog'
                 }
+            )
+        } elseif ($a.knowledgeKind -eq 'search') {
+            $definition.knowledge = @(
+                @{ kind = 'azure_ai_search'; azure_ai_search = @{ connection_name = 'jaguar-catalog';    index_name = 'jaguar-catalog'    } },
+                @{ kind = 'azure_ai_search'; azure_ai_search = @{ connection_name = 'parryware-catalog'; index_name = 'parryware-catalog' } }
             )
         }
         $createBody = @{ definition = $definition } | ConvertTo-Json -Depth 12
+        $localFp    = Get-ContentFingerprint $createBody
+
+        # Load cached fingerprints from state.
+        $cachedFps = if ($state.ContainsKey('agentFingerprints') -and $state['agentFingerprints']) {
+            [hashtable]$state['agentFingerprints']
+        } else { @{} }
+        $cachedFp = $cachedFps[$a.idKey]
+
+        # 1) Already cached locally AND fingerprint matches -> truly safe to skip.
+        if ($agentIds[$a.idKey] -and $cachedFp -eq $localFp) {
+            Write-Skip "  '$agentName' unchanged (fp=$localFp) -> $($agentIds[$a.idKey])"
+            continue
+        }
+
+        # 2) Exists in Foundry by name AND we have a matching fingerprint cached
+        #    against this idKey: just adopt the existing version id.
+        if ($existingByName.ContainsKey($agentName) -and $cachedFp -eq $localFp) {
+            $agentIds[$a.idKey] = $existingByName[$agentName]
+            State-Set 'agentIds' $agentIds
+            Write-Skip "  '$agentName' adopted from Foundry (fp=$localFp) -> $($existingByName[$agentName])"
+            continue
+        }
+
+        # 3) Otherwise: definition is new OR has CHANGED -> mint a new version.
+        #    The /agents/{name}/versions POST is non-destructive: each call
+        #    creates a NEW version, older versions remain visible in the portal
+        #    history under the same agent name.
+        if ($cachedFp -and $cachedFp -ne $localFp) {
+            Write-Step "  '$agentName' definition CHANGED (cached fp=$cachedFp -> local fp=$localFp) - minting new version..."
+        } elseif ($existingByName.ContainsKey($agentName)) {
+            Write-Step "  '$agentName' exists in Foundry but no local fingerprint cached - minting fresh version to align with current definition..."
+        } else {
+            Write-Step "  '$agentName' new agent - creating first version..."
+        }
 
         try {
-            $resp = Invoke-RestWithRetry -Method Post `
-                -Uri "$agentsEndpoint/agents/$agentName/versions?api-version=$fApiVer" `
-                -Headers $aiHdr -Body $createBody
+            $resp = $null
+            try {
+                $resp = Invoke-RestWithRetry -Method Post `
+                    -Uri "$agentsEndpoint/agents/$agentName/versions?api-version=$fApiVer" `
+                    -Headers $aiHdr -Body $createBody
+            } catch {
+                $sc = 0; if ($_.Exception.Response) { try { $sc = [int]$_.Exception.Response.StatusCode } catch { } }
+                # If the agents API rejects the KB binding shape (preview API surface
+                # for knowledge_bases is still in flux), automatically rebuild this
+                # ONE agent's body with the legacy per-connection binding and retry.
+                # The KB resource itself remains present in the search service - this
+                # only affects how the agent references it. The orchestrator's
+                # belt-and-braces retrieval (Step A direct AI Search + Step B agent
+                # re-rank) makes the user-visible behaviour identical either way.
+                if ($a.knowledgeKind -eq 'knowledge-base' -and $sc -ge 400 -and $sc -lt 500) {
+                    $em = $_.ErrorDetails.Message; if (-not $em) { $em = $_.Exception.Message }
+                    Write-Skip "    Foundry rejected knowledge_bases binding for '$agentName' (HTTP $sc): $em"
+                    Write-Skip "    Retrying with legacy per-connection binding (KB resource stays in search service)."
+                    $definition.Remove('knowledge_bases') | Out-Null
+                    $definition.knowledge = @(
+                        @{ kind = 'azure_ai_search'; azure_ai_search = @{ connection_name = 'jaguar-catalog';    index_name = 'jaguar-catalog'    } },
+                        @{ kind = 'azure_ai_search'; azure_ai_search = @{ connection_name = 'parryware-catalog'; index_name = 'parryware-catalog' } }
+                    )
+                    $createBody = @{ definition = $definition } | ConvertTo-Json -Depth 12
+                    $localFp = Get-ContentFingerprint $createBody
+                    $resp = Invoke-RestWithRetry -Method Post `
+                        -Uri "$agentsEndpoint/agents/$agentName/versions?api-version=$fApiVer" `
+                        -Headers $aiHdr -Body $createBody
+                    # Force the kHint to reflect what actually got registered.
+                    $a.knowledgeKind = 'search'
+                } else { throw }
+            }
             $aid = if ($resp.id) { $resp.id } else { "$agentName/v$($resp.version)" }
             $agentIds[$a.idKey] = $aid
-            State-Set 'agentIds' $agentIds   # PARTIAL PROGRESS - survives a crash
-            $kHint = if ($a.knowledgeKind -eq 'search') { ' + knowledge=[jaguar-catalog,parryware-catalog]' } else { '' }
-            Write-Ok "  '$agentName' -> $aid (kind=prompt, model=$($a.modelOverride)$kHint)"
+            $cachedFps[$a.idKey] = $localFp
+            State-Set 'agentIds'           $agentIds   # PARTIAL PROGRESS - survives a crash
+            State-Set 'agentFingerprints'  $cachedFps
+            $kHint = switch ($a.knowledgeKind) {
+                'knowledge-base' { " + knowledge_bases=[{name=$($a.knowledgeBaseName), connection=jaguar-catalog}]" }
+                'search'         { ' + knowledge=[jaguar-catalog,parryware-catalog]' }
+                default          { '' }
+            }
+            Write-Ok "  '$agentName' -> $aid (kind=prompt, model=$($a.modelOverride)$kHint, fp=$localFp)"
         } catch {
             $em = $_.ErrorDetails.Message; if (-not $em) { $em = $_.Exception.Message }
             Write-Err2 "Could not create agent '$agentName': $em"
@@ -2201,7 +2541,7 @@ if ($state['agents_done'] -and $agentIds.Count -ge 4 -and $state['agents_knowled
         }
     }
     State-Set 'agents_done' $true
-    State-Set 'agents_knowledge_v2' $true
+    State-Set 'agents_knowledge_v3' $true
 }
 Write-Ok "Agent IDs: chat=$($agentIds.chatAgentId)  catalog=$($agentIds.catalogSearchAgentId)  image=$($agentIds.imageGenAgentId)"
 

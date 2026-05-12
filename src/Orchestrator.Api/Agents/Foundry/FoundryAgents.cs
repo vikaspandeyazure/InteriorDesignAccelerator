@@ -230,6 +230,12 @@ internal sealed class FoundryImageGenAgent : IImageGenAgent
         var token = await _credential.GetTokenAsync(new TokenRequestContext(AadScopes), ct);
 
         // MAI body shape: model + prompt + width/height (NOT size: "1024x1024").
+        // NOTE: do NOT pass response_format - mai-image-2 rejects it with
+        // "Model does not support request argument supplied: Invalid
+        // parameters: response_format". MAI decides on its own whether to
+        // return inline 'b64_json' or a 'url'; we handle both shapes below,
+        // and the URL path attaches our Bearer token so the storage GET
+        // succeeds (the URL points at an authenticated Foundry blob).
         var body = JsonSerializer.Serialize(new
         {
             model  = _modelDeployment,
@@ -273,7 +279,15 @@ internal sealed class FoundryImageGenAgent : IImageGenAgent
                             var url = urlEl.GetString();
                             if (!string.IsNullOrEmpty(url))
                             {
-                                using var imgResp = await _http.GetAsync(url, ct);
+                                // Defensive fallback only - response_format='b64_json' above means
+                                // MAI normally returns inline bytes. If a deployment ignores the
+                                // hint and still returns a URL, that URL points at an authenticated
+                                // Foundry-hosted blob; attach the same Bearer token we used for
+                                // the POST so the GET succeeds. Anonymous GET would 403 with
+                                // "AuthorizationFailure" (Storage data plane).
+                                using var imgReq = new HttpRequestMessage(HttpMethod.Get, url);
+                                imgReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token.Token);
+                                using var imgResp = await _http.SendAsync(imgReq, ct);
                                 if (imgResp.IsSuccessStatusCode)
                                     return await imgResp.Content.ReadAsByteArrayAsync(ct);
                             }

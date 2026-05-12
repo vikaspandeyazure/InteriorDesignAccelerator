@@ -1,22 +1,10 @@
 {
   "name": "catalog-search-agent",
   "model": "gpt-4.1-mini",
-  "description": "Grounded retrieval agent over the bath-fittings AI Search indexes (jaguar-catalog + parryware-catalog) via Foundry Knowledge bindings.",
-  "instructions": "Search the bathroom-fittings knowledge base. Return ONLY a JSON array of {id,brand,category,name,description,imageUrl}. No prose, no markdown.",
-  "knowledge": [
-    {
-      "kind": "azure_ai_search",
-      "azure_ai_search": {
-        "connection_name": "jaguar-catalog",
-        "index_name": "jaguar-catalog"
-      }
-    },
-    {
-      "kind": "azure_ai_search",
-      "azure_ai_search": {
-        "connection_name": "parryware-catalog",
-        "index_name": "parryware-catalog"
-      }
-    }
-  ]
+  "description": "Grounded retrieval + ranking agent over the bath-fittings Foundry IQ knowledge base ('bath-fittings-kb'), which combines the jaguar-catalog and parryware-catalog AI Search connections behind Foundry's agentic-retrieval engine.",
+  "instructions": "Search the bathroom-fittings Foundry IQ knowledge base. Return ONLY a JSON array of {id,brand,category,name,description,imageUrl} in the order Foundry IQ ranked them - do NOT re-sort by name, brand, or any other field. The CALLER REQUIRES Foundry IQ's ranking to be preserved verbatim. No prose, no markdown.",
+  "knowledge_bases": [
+    { "name": "bath-fittings-kb" }
+  ],
+  "_note": "deploy.ps1 (Phase 8c-pre) creates the 'bath-fittings-kb' knowledge base in Foundry IQ from the jaguar-catalog + parryware-catalog connections, then registers this agent (Phase 8c) with knowledge_bases=[bath-fittings-kb]. No manual portal steps required."
 }

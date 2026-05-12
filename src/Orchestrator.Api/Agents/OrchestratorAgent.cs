@@ -114,6 +114,13 @@ public sealed class OrchestratorAgent
 
         // 2.5) Mark TOP MATCHES from Foundry IQ's semantic ranking.
         //
+        // CRITICAL: the order of `items` is the order Foundry IQ (the
+        // catalog-search-agent backed by the knowledge base) returned. We
+        // must NOT re-sort by Score, Name, Brand or any other client-side
+        // signal - the whole point of the agentic-retrieval engine is that
+        // its ranking IS the ranking. Re-sorting here would silently
+        // discard Foundry IQ's relevance judgement.
+        //
         // We removed the previous vision-grounding step (gpt-4.1-mini Vision
         // describing each hero image -> feeding text back to MAI) because:
         //   * MAI is text-to-image; it cannot reproduce exact catalog products
@@ -131,19 +138,18 @@ public sealed class OrchestratorAgent
         //     /api/catalog/page-image endpoint to stream the inline hero JPEG
         //     into each TOP MATCH card).
         //   * The UsedAsVisualReference flag on CatalogItem - now repurposed
-        //     as "this is one of Foundry IQ's top 2 page-level matches" so
-        //     the UI badge + inline hero rendering keep working.
+        //     as "this is one of Foundry IQ's top-2 page-level matches" so
+        //     the UI badge + inline hero rendering keep working. We pick the
+        //     first 2 page-grounded items in agent order (NOT by Score),
+        //     because the agent has already ranked them.
         var topMatchIds = items
             .Where(i => i.PageNumber is > 0 && !string.IsNullOrWhiteSpace(i.SourceFile))
-            .OrderByDescending(i => i.Score ?? 0)
             .Take(2)
             .Select(i => i.Id)
             .ToHashSet(StringComparer.Ordinal);
 
         items = items
             .Select(i => topMatchIds.Contains(i.Id) ? i with { UsedAsVisualReference = true } : i)
-            .OrderByDescending(i => i.UsedAsVisualReference)
-            .ThenByDescending(i => i.Score ?? 0)
             .ToList();
 
         // 3) Compose - grounded in the text descriptions from AI Search. The
@@ -175,12 +181,12 @@ public sealed class OrchestratorAgent
 
             Write TWO sections separated by '---':
 
-            SECTION A (markdown narrative for the designer, 4-6 sentences). Mention each product
-            by name AND explicitly call out how the user's style hints ({{styles}}) shape the
-            final design - finishes, materials, palette, lighting mood. End with one short
-            closing sentence inviting the designer to review the matched catalog fittings shown
-            below the rendered image (e.g. "Take a look at the matching Jaguar and Parryware
-            fittings below - they were surfaced from your catalogs and may be worth specifying.").
+            SECTION A (markdown narrative for the designer). HARD CONSTRAINT: 2-3 SHORT
+            sentences, total under 60 words. Mention only the 1-2 most relevant matched
+            products by name. Call out how the user's style hints ({{styles}}) shape ONE
+            visual element (e.g. palette OR materials OR lighting - not all). End with a
+            5-8 word nudge to scan the gallery below (e.g. "See matching fittings below.").
+            DO NOT write more than 3 sentences. DO NOT use bullet lists. DO NOT pad.
 
             SECTION B (single paragraph image-generation prompt for a photo-realistic modern
             bathroom).
@@ -202,10 +208,17 @@ public sealed class OrchestratorAgent
             """;
         await EmitAsync(new AgentTrace(_chat.Name, "compose-begin", "writing narrative + image prompt...", DateTimeOffset.UtcNow));
         var composed = await _chat.RespondAsync(
-            systemPrompt: "You are a senior interior-design copywriter and prompt engineer.",
+            systemPrompt: "You are a senior interior-design copywriter and prompt engineer. Be concise. Hard limits in the user prompt are non-negotiable.",
             userPrompt: composeUser,
             ct: ct);
         var (narrative, imagePrompt) = SplitSections(composed, fallback: req.Prompt);
+
+        // Safety net: if the model ignored the 60-word constraint (some gpt-4.1-mini
+        // turns over-explain), trim the narrative to ~480 chars at a sentence
+        // boundary. The "Fittings you may like" gallery + per-card descriptions
+        // already carry the product context; the narrative just needs to set tone.
+        narrative = TrimNarrative(narrative, maxChars: 480);
+
         await EmitAsync(new AgentTrace(_chat.Name, "compose", Truncate(imagePrompt, 400), DateTimeOffset.UtcNow));
 
         // 5) Render
@@ -262,6 +275,38 @@ public sealed class OrchestratorAgent
     }
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "…";
+
+    /// <summary>
+    /// Hard safety-net for the SECTION A narrative when the model ignores the
+    /// "2-3 short sentences, &lt; 60 words" constraint in the compose prompt.
+    /// Trims to <paramref name="maxChars"/> at the nearest sentence boundary
+    /// (period / exclamation / question mark) so the UI bubble never grows
+    /// past a sensible reading height. Hard cap fallback if no sentence
+    /// boundary exists in the window.
+    /// </summary>
+    private static string TrimNarrative(string narrative, int maxChars)
+    {
+        if (string.IsNullOrWhiteSpace(narrative)) return narrative;
+        var s = narrative.Trim();
+        if (s.Length <= maxChars) return s;
+
+        // Find the last sentence boundary at or before maxChars. Search a small
+        // window from maxChars-80 .. maxChars so we don't truncate to a single
+        // word when the model wrote one giant run-on sentence.
+        var window = s[..Math.Min(maxChars, s.Length)];
+        var cutBoundary = -1;
+        foreach (var ch in new[] { '.', '!', '?' })
+        {
+            var idx = window.LastIndexOf(ch);
+            if (idx > cutBoundary) cutBoundary = idx;
+        }
+        if (cutBoundary >= maxChars - 120 && cutBoundary > 0)
+        {
+            return s[..(cutBoundary + 1)].Trim();
+        }
+        // No usable sentence boundary - hard truncate with ellipsis.
+        return s[..maxChars].Trim() + "…";
+    }
 
     /// <summary>
     /// Compact filename for trace messages: drop common suffixes
