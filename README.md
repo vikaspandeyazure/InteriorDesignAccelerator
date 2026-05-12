@@ -48,23 +48,29 @@ The narrative is **honest about its boundaries**: MAI provides *inspiration*; Fo
 
 ## High-level architecture
 
-```mermaid
-flowchart LR
-    User([Designer]) -->|HTTPS| WebUi[Blazor Server Web.Ui App Service B1]
-    WebUi -->|HttpClient + APIM key| APIM[Azure API Management Consumption SKU]
-    APIM --> Orch[Orchestrator API ASP.NET 8 Minimal API Container Apps]
-    subgraph Foundry["Microsoft Foundry Project"]
-        Chat[gpt-4.1-mini chat model]
-        MAI[(MAI-Image-2 text-to-image)]
-    end
-    Orch -->|Responses API plan / re-rank / compose| Chat
-    Orch -->|/mai/v1/images/generations| MAI
-    Search -.-> AISearch[(Azure AI Search jaguar-catalog parryware-catalog)]
-    Orch -->|MI authenticated| AISearch
-    Orch -->|MI authenticated| Blob[(Blob Storage catalog PDFs generated images)]
-    Blob -. "ingested at deploy by Document Intelligence Layout" .-> AISearch
-    WebUi -. "ui catalog page-rendered same-origin proxy" .-> Orch
-```
+<p align="center">
+  <img src="docs/assets/architecture-overview.svg" alt="Interior Design Accelerator — Azure architecture overview" width="100%"/>
+</p>
+
+<p align="center"><sub>
+  Foundry IQ Agents (GPT-4.1 Mini · Semantic Search · Document Intelligence) ·
+  MAI-Image-2 · Azure Container Apps · Azure App Service (Blazor) ·
+  Azure API Management · Azure Cognitive Services
+  &nbsp;|&nbsp; <a href="docs/assets/architecture-overview.png">PNG</a>
+  · <a href="docs/assets/architecture-overview.svg">SVG (editable)</a>
+</sub></p>
+
+<details>
+<summary>📐 Detailed tiered view (click to expand)</summary>
+
+<p align="center">
+  <img src="docs/assets/architecture.svg" alt="Interior Design Accelerator — detailed tiered architecture" width="100%"/>
+</p>
+
+> PNG export of the detailed view: [`docs/assets/architecture.png`](docs/assets/architecture.png).
+> Source SVG (editable): [`docs/assets/architecture.svg`](docs/assets/architecture.svg) — see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#regenerating-the-diagram) to regenerate the PNG.
+
+</details>
 
 ---
 
@@ -269,6 +275,8 @@ This repository's **code** is licensed under the **MIT License** - see [`LICENSE
 Catalog PDFs/images of **Jaguar** and **Parryware** products are **third-party copyrighted material**. They are referenced for the demo only and are **not** redistributed in this repository. Place them under `C:\Bath Fittings Data\jaguar` and `C:\Bath Fittings Data\parryware` on your machine; `deploy.ps1` copies them into `data/catalogs/` and uploads them to Azure Blob Storage at deploy time. You are responsible for your right to use these materials.
 
 The names *Jaguar* and *Parryware* are trademarks of their respective owners and are used here strictly to illustrate a brand-grounded retrieval pattern.
+
+The architecture diagrams in [`docs/assets/`](docs/assets/) embed service icons from the **Microsoft Azure Architecture Icons** set (© Microsoft Corporation). They are used here in line with Microsoft's [icon terms of use](https://learn.microsoft.com/azure/architecture/icons/) — see [`docs/assets/azure-icons/ATTRIBUTION.md`](docs/assets/azure-icons/ATTRIBUTION.md) for details.
 
 ---
 

@@ -26,28 +26,49 @@ For the request-time control flow, see [`FLOW.md`](FLOW.md). For the product sce
 
 ## 2. Components
 
-```
-                          +-------------------------------+
-                          |   Microsoft Foundry Project   |
-                          |   - gpt-4.1-mini (chat)       |
-                          |   - MAI-Image-2 (image)       |
-                          |   - 3 hosted agents           |
-                          |   - Knowledge -> AI Search    |
-                          +---------------+---------------+
-                                          ^
-                                          | data-plane (AAD)
-+----------+   HTTPS    +----------+      |
-| Browser  +----------->+  Web.Ui  +------+ -- HttpClient + APIM key --> +----------+    +------------------+
-| (user)   |   (SSE)    | Blazor   |                                     |   APIM   +--->+ Orchestrator API |
-+----+-----+            | Server   |<------ same-origin proxy ---------- | (Consu.) |    |  ASP.NET 8 / ACA |
-     ^                  +----+-----+                                     +----------+    +---+----------+---+
-     |                       |                                                               |          |
-     |   image/png           |                                                               |          | MI
-     +-----------------------+                                                               v          v
-                                                                                       +-----------+ +---------+
-                                                                                       | AI Search | | Storage |
-                                                                                       |  (basic)  | |  (LRS)  |
-                                                                                       +-----------+ +---------+
+<p align="center">
+  <img src="assets/architecture-overview.svg" alt="Interior Design Accelerator — Azure architecture overview" width="100%"/>
+</p>
+
+<p align="center"><sub>
+  PNG: <a href="assets/architecture-overview.png">assets/architecture-overview.png</a> ·
+  Source SVG: <a href="assets/architecture-overview.svg">assets/architecture-overview.svg</a>
+</sub></p>
+
+<details>
+<summary>Detailed tiered view (click to expand)</summary>
+
+<p align="center">
+  <img src="assets/architecture.svg" alt="Interior Design Accelerator — detailed tiered architecture" width="100%"/>
+</p>
+
+> PNG export: [`assets/architecture.png`](assets/architecture.png) · Source SVG: [`assets/architecture.svg`](assets/architecture.svg).
+
+</details>
+
+### Regenerating the diagram
+
+The diagram is a hand-authored SVG (`docs/assets/architecture.svg`) — edit it in any SVG editor (VS Code with an SVG preview extension, Inkscape, Figma, etc.) and re-export the PNG with:
+
+```pwsh
+# one-time: install sharp in a scratch folder
+$tmp = Join-Path $env:TEMP 'svg2png'
+New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+Push-Location $tmp
+npm init -y | Out-Null
+npm install --no-audit --no-fund sharp
+Pop-Location
+
+# render PNG from SVG (run from repo root)
+@"
+const sharp = require('sharp');
+const fs = require('fs');
+sharp(fs.readFileSync('docs/assets/architecture.svg'), { density: 200 })
+  .resize(1480, 980).png({ compressionLevel: 9 })
+  .toFile('docs/assets/architecture.png')
+  .then(i => console.log('ok', i.width + 'x' + i.height, i.size, 'bytes'));
+"@ | Out-File -Encoding utf8 "$tmp\conv.js"
+node "$tmp\conv.js"
 ```
 
 | # | Component | Role |
