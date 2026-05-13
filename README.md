@@ -50,28 +50,18 @@ The narrative is **honest about its boundaries**: MAI provides *inspiration*; Fo
 ## High-level architecture
 
 <p align="center">
-  <img src="docs/assets/architecture-overview.svg" alt="Interior Design Accelerator — Azure architecture overview" width="100%"/>
+  <img src="docs/assets/architecture.svg" alt="Interior Design Accelerator — Azure architecture" width="100%"/>
 </p>
 
 <p align="center"><sub>
-  Foundry IQ Agents (GPT-4.1 Mini · Semantic Search · Document Intelligence) ·
-  MAI-Image-2 · Azure Container Apps · Azure App Service (Blazor) ·
-  Azure API Management · Azure Cognitive Services
-  &nbsp;|&nbsp; <a href="docs/assets/architecture-overview.png">PNG</a>
-  · <a href="docs/assets/architecture-overview.svg">SVG (editable)</a>
+  Microsoft Foundry (Azure OpenAI · GPT-4.1 Mini · Foundry IQ · Document Intelligence) ·
+  MAI-Image Generation · MAF Orchestration Layer (Request Handler · Workflow Orchestrator · Trace Monitor SSE) ·
+  Brand Catalogs (Jaguar · Parryware) on Azure Blob Storage · Azure AI Search ·
+  Azure API Management · Azure Container Apps · Azure App Service (Blazor Server) · Azure Monitor
+  &nbsp;|&nbsp; <a href="docs/assets/architecture.svg">SVG (editable)</a>
 </sub></p>
 
-<details>
-<summary>📐 Detailed tiered view (click to expand)</summary>
-
-<p align="center">
-  <img src="docs/assets/architecture.svg" alt="Interior Design Accelerator — detailed tiered architecture" width="100%"/>
-</p>
-
-> PNG export of the detailed view: [`docs/assets/architecture.png`](docs/assets/architecture.png).
-> Source SVG (editable): [`docs/assets/architecture.svg`](docs/assets/architecture.svg) — see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#regenerating-the-diagram) to regenerate the PNG.
-
-</details>
+> Source SVG (editable): [`docs/assets/architecture.svg`](docs/assets/architecture.svg) — see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#regenerating-the-diagram) for notes on regenerating the diagram.
 
 ---
 
