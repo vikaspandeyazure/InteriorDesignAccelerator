@@ -67,13 +67,22 @@ internal sealed class FoundryCatalogSearchAgent : ICatalogSearchAgent
     public async Task<IReadOnlyList<CatalogItem>> FindAsync(string query, IReadOnlyList<string>? brandFilter, CancellationToken ct = default)
     {
         // STEP A: Real retrieval against the 2 brand-specific AI Search indexes
-        // (jaguar-catalog + parryware-catalog). These are the same indexes that
-        // are surfaced as "Knowledge" connections in Foundry portal.
+        // (jaguar-catalog + parryware-catalog). The orchestrator runs the
+        // search itself - this is the canonical, working flow.
+        //
+        // We deliberately do NOT depend on the catalog-search-agent's own
+        // knowledge bindings to do retrieval. Per portal evidence the agents
+        // /versions endpoint silently drops 'knowledge' / 'knowledge_bases' /
+        // 'knowledgeSources' fields on the current preview surface, leaving
+        // the agent ungrounded server-side. If we trusted the agent for
+        // retrieval, the user would get zero results.
         var retrieved = await _search.SearchAsync(query, brandFilter, top: 12, ct);
         if (retrieved.Count == 0) return retrieved;
 
-        // STEP B: Foundry catalog-search-agent re-ranks / filters / formats the results
-        // so the rest of the pipeline gets the *most relevant* 8 (or fewer) items.
+        // STEP B: Foundry catalog-search-agent acts as a RE-RANKER. We hand it
+        // the 12 candidates (so it doesn't need its own knowledge bindings to
+        // see the data) and ask it to pick the best 8 in priority order. The
+        // agent's job is judgment over text, not retrieval.
         var brands = brandFilter is { Count: > 0 } ? string.Join(", ", brandFilter) : "any";
         var asJson = JsonSerializer.Serialize(retrieved.Select(r => new
         {
@@ -93,17 +102,16 @@ internal sealed class FoundryCatalogSearchAgent : ICatalogSearchAgent
             var ranked = ParseItems(raw);
             if (ranked.Count == 0) return retrieved.Take(8).ToList();
 
-            // CRITICAL: the Foundry re-ranking agent only returns the
-            // {id,brand,category,name,description,imageUrl} subset, so
-            // SourceFile / PageNumber / Score are LOST in the agent round-trip.
-            // We re-join the agent's ranked Id list against the original AI
-            // Search retrieval to restore those fields - they are the real
-            // grounding signal the rest of the pipeline depends on (per-page
-            // PDF proxy, /api/catalog/page-rendered thumbnails, the TOP MATCH
-            // badge). The agent's only contribution is the ORDER + the FILTER.
-            // If the agent hallucinates an Id not in the retrieval, we drop
-            // it - the pipeline only passes through items grounded in the
-            // actual catalog index.
+            // CRITICAL: the agent only returns the {id,brand,category,name,
+            // description,imageUrl} subset, so SourceFile / PageNumber / Score
+            // are LOST in the agent round-trip. We re-join the agent's ranked
+            // Id list against the original AI Search retrieval to restore those
+            // fields - they are the real grounding signal the rest of the
+            // pipeline depends on (per-page PDF proxy, /api/catalog/page-rendered
+            // thumbnails, the TOP MATCH badge). The agent's contribution is
+            // ORDER + FILTER. If the agent hallucinates an Id not in the
+            // retrieval, we drop it - the pipeline only passes through items
+            // grounded in the actual catalog index.
             var byId = retrieved.ToDictionary(r => r.Id, r => r, StringComparer.Ordinal);
             var merged = new List<CatalogItem>(ranked.Count);
             foreach (var r in ranked)
@@ -117,7 +125,8 @@ internal sealed class FoundryCatalogSearchAgent : ICatalogSearchAgent
         }
         catch
         {
-            // Agent failed -> fall through with the raw retrieval (still real data, no hallucination risk)
+            // Agent failed -> fall through with the raw retrieval (still real
+            // data in AI Search relevance order, no hallucination risk).
             return retrieved.Take(8).ToList();
         }
     }

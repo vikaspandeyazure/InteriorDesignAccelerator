@@ -2425,34 +2425,29 @@ if ($state['agents_done'] -and $agentIds.Count -ge 4 -and $state['agents_knowled
 
         $agentName = $tpl.name      # e.g. 'catalog-search-agent'
 
-        # Build the definition body FIRST so we can fingerprint it before
-        # deciding whether to reuse an existing version or mint a new one.
-        # Any change to model / instructions / knowledge bindings (including
-        # switching from legacy 'knowledge' to 'knowledge_bases', or KB name)
-        # will produce a new fingerprint and force a new version to be minted.
+        # Build the request body FIRST so we can fingerprint it before deciding
+        # whether to reuse an existing version or mint a new one.
+        #
+        # WORKING SHAPE: 'definition' wrapper with kind/model/instructions and
+        # an optional 'knowledge' array. This is the shape the Foundry agents
+        # /versions endpoint accepts and persists today (verified by every
+        # successful registration in this project's history).
+        #
+        # We tried 'properties + knowledgeSources' (per the Foundry IQ Connect
+        # docs) but the current preview surface either rejects it or silently
+        # drops the knowledge fields. Until that surface stabilises (use
+        # tools/foundry-test/test-create-agent.ps1 to probe new shapes), we
+        # stick with this working contract. The catalog-search-agent runs as
+        # a RE-RANKER over candidates the orchestrator hands it - it does
+        # NOT need its own knowledge bindings to do that job. The Foundry IQ
+        # KB ('bath-fittings-kb') still gets created on the search service
+        # (Phase 8c-pre) and is visible in the Foundry portal under the
+        # Foundry IQ tab; it's available for future agent binding once the
+        # API surface supports it.
         $definition = @{
             kind         = 'prompt'
             model        = $a.modelOverride
             instructions = $tpl.instructions
-        }
-        if ($a.knowledgeKind -eq 'knowledge-base') {
-            # The KB lives on the AI Search service. The Foundry agent runtime
-            # reaches it via one of the project's CognitiveSearch connections;
-            # either of our two existing connections (jaguar-catalog or
-            # parryware-catalog) works because both target the SAME search
-            # service - the KB itself fans out to both indexes via its
-            # knowledge sources. We pick jaguar-catalog deterministically.
-            $definition.knowledge_bases = @(
-                @{
-                    name            = $a.knowledgeBaseName
-                    connection_name = 'jaguar-catalog'
-                }
-            )
-        } elseif ($a.knowledgeKind -eq 'search') {
-            $definition.knowledge = @(
-                @{ kind = 'azure_ai_search'; azure_ai_search = @{ connection_name = 'jaguar-catalog';    index_name = 'jaguar-catalog'    } },
-                @{ kind = 'azure_ai_search'; azure_ai_search = @{ connection_name = 'parryware-catalog'; index_name = 'parryware-catalog' } }
-            )
         }
         $createBody = @{ definition = $definition } | ConvertTo-Json -Depth 12
         $localFp    = Get-ContentFingerprint $createBody
@@ -2491,49 +2486,53 @@ if ($state['agents_done'] -and $agentIds.Count -ge 4 -and $state['agents_knowled
         }
 
         try {
-            $resp = $null
-            try {
-                $resp = Invoke-RestWithRetry -Method Post `
-                    -Uri "$agentsEndpoint/agents/$agentName/versions?api-version=$fApiVer" `
-                    -Headers $aiHdr -Body $createBody
-            } catch {
-                $sc = 0; if ($_.Exception.Response) { try { $sc = [int]$_.Exception.Response.StatusCode } catch { } }
-                # If the agents API rejects the KB binding shape (preview API surface
-                # for knowledge_bases is still in flux), automatically rebuild this
-                # ONE agent's body with the legacy per-connection binding and retry.
-                # The KB resource itself remains present in the search service - this
-                # only affects how the agent references it. The orchestrator's
-                # belt-and-braces retrieval (Step A direct AI Search + Step B agent
-                # re-rank) makes the user-visible behaviour identical either way.
-                if ($a.knowledgeKind -eq 'knowledge-base' -and $sc -ge 400 -and $sc -lt 500) {
-                    $em = $_.ErrorDetails.Message; if (-not $em) { $em = $_.Exception.Message }
-                    Write-Skip "    Foundry rejected knowledge_bases binding for '$agentName' (HTTP $sc): $em"
-                    Write-Skip "    Retrying with legacy per-connection binding (KB resource stays in search service)."
-                    $definition.Remove('knowledge_bases') | Out-Null
-                    $definition.knowledge = @(
-                        @{ kind = 'azure_ai_search'; azure_ai_search = @{ connection_name = 'jaguar-catalog';    index_name = 'jaguar-catalog'    } },
-                        @{ kind = 'azure_ai_search'; azure_ai_search = @{ connection_name = 'parryware-catalog'; index_name = 'parryware-catalog' } }
-                    )
-                    $createBody = @{ definition = $definition } | ConvertTo-Json -Depth 12
-                    $localFp = Get-ContentFingerprint $createBody
-                    $resp = Invoke-RestWithRetry -Method Post `
-                        -Uri "$agentsEndpoint/agents/$agentName/versions?api-version=$fApiVer" `
-                        -Headers $aiHdr -Body $createBody
-                    # Force the kHint to reflect what actually got registered.
-                    $a.knowledgeKind = 'search'
-                } else { throw }
-            }
+            $resp = Invoke-RestWithRetry -Method Post `
+                -Uri "$agentsEndpoint/agents/$agentName/versions?api-version=$fApiVer" `
+                -Headers $aiHdr -Body $createBody
             $aid = if ($resp.id) { $resp.id } else { "$agentName/v$($resp.version)" }
             $agentIds[$a.idKey] = $aid
             $cachedFps[$a.idKey] = $localFp
             State-Set 'agentIds'           $agentIds   # PARTIAL PROGRESS - survives a crash
             State-Set 'agentFingerprints'  $cachedFps
-            $kHint = switch ($a.knowledgeKind) {
-                'knowledge-base' { " + knowledge_bases=[{name=$($a.knowledgeBaseName), connection=jaguar-catalog}]" }
-                'search'         { ' + knowledge=[jaguar-catalog,parryware-catalog]' }
-                default          { '' }
-            }
+            $kHint = if ($a.knowledgeKind -eq 'knowledge-base') { " (re-ranker; KB '$($a.knowledgeBaseName)' lives on search service for portal visibility)" } else { '' }
             Write-Ok "  '$agentName' -> $aid (kind=prompt, model=$($a.modelOverride)$kHint, fp=$localFp)"
+
+            # ---- DIAGNOSTIC: GET the freshly-created version and dump what
+            # Foundry actually persisted. The portal evidence (empty Knowledge
+            # tab on v3 + v4) suggests the API is silently dropping our
+            # 'knowledge' / 'knowledge_bases' fields. Dumping the persisted
+            # body tells us EXACTLY what shape Foundry expects so the next
+            # iteration is data-driven, not a guess.
+            if ($a.knowledgeKind -ne 'none') {
+                try {
+                    $verNum = if ($resp.version) { $resp.version } elseif ($resp.latest_version) { $resp.latest_version } else { '' }
+                    $detailUri = if ($verNum) {
+                        "$agentsEndpoint/agents/$agentName/versions/$verNum`?api-version=$fApiVer"
+                    } else {
+                        "$agentsEndpoint/agents/$agentName`?api-version=$fApiVer"
+                    }
+                    $persisted = Invoke-RestMethod -Uri $detailUri -Headers $aiHdr -Method Get -ErrorAction Stop
+                    $persistedJson = $persisted | ConvertTo-Json -Depth 16 -Compress
+                    if ($persistedJson.Length -gt 1200) { $persistedJson = $persistedJson.Substring(0,1200) + '...(truncated)' }
+                    Write-Host "    [DIAG] sent body keys: $((($definition.Keys) -join ','))" -ForegroundColor DarkCyan
+                    Write-Host "    [DIAG] persisted GET $detailUri" -ForegroundColor DarkCyan
+                    Write-Host "    [DIAG] $persistedJson" -ForegroundColor DarkGray
+
+                    # Soft warning if our knowledge bindings vanished.
+                    $hasK  = ($persistedJson -match '"knowledge"\s*:\s*\[')
+                    $hasKb = ($persistedJson -match '"knowledge_bases"\s*:\s*\[')
+                    $hasT  = ($persistedJson -match '"tools"\s*:\s*\[')
+                    if (-not $hasK -and -not $hasKb -and -not $hasT) {
+                        Write-Host "    [DIAG] WARNING: persisted version contains no 'knowledge', 'knowledge_bases', or 'tools' field." -ForegroundColor Yellow
+                        Write-Host "    [DIAG] Foundry agents API silently dropped our binding fields. To fix:" -ForegroundColor Yellow
+                        Write-Host "    [DIAG]   1. Open the agent in the Foundry portal -> click the YAML or Code tab" -ForegroundColor Yellow
+                        Write-Host "    [DIAG]   2. Share the YAML body with the deploy script maintainer so the canonical shape can be matched." -ForegroundColor Yellow
+                    }
+                } catch {
+                    $em = $_.ErrorDetails.Message; if (-not $em) { $em = $_.Exception.Message }
+                    Write-Skip "    [DIAG] could not GET persisted version: $em"
+                }
+            }
         } catch {
             $em = $_.ErrorDetails.Message; if (-not $em) { $em = $_.Exception.Message }
             Write-Err2 "Could not create agent '$agentName': $em"

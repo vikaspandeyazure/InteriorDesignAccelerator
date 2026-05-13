@@ -48,28 +48,13 @@ For the request-time control flow, see [`FLOW.md`](FLOW.md). For the product sce
 
 ### Regenerating the diagram
 
-The diagram is a hand-authored SVG (`docs/assets/architecture.svg`) — edit it in any SVG editor (VS Code with an SVG preview extension, Inkscape, Figma, etc.) and re-export the PNG with:
+The diagram is a hand-authored SVG (`docs/assets/architecture.svg`) — edit it in any SVG editor (VS Code with an SVG preview extension, Inkscape, Figma, etc.) then re-render the matching PNG with the helper script:
 
 ```pwsh
-# one-time: install sharp in a scratch folder
-$tmp = Join-Path $env:TEMP 'svg2png'
-New-Item -ItemType Directory -Force -Path $tmp | Out-Null
-Push-Location $tmp
-npm init -y | Out-Null
-npm install --no-audit --no-fund sharp
-Pop-Location
-
-# render PNG from SVG (run from repo root)
-@"
-const sharp = require('sharp');
-const fs = require('fs');
-sharp(fs.readFileSync('docs/assets/architecture.svg'), { density: 200 })
-  .resize(1480, 980).png({ compressionLevel: 9 })
-  .toFile('docs/assets/architecture.png')
-  .then(i => console.log('ok', i.width + 'x' + i.height, i.size, 'bytes'));
-"@ | Out-File -Encoding utf8 "$tmp\conv.js"
-node "$tmp\conv.js"
+pwsh ./docs/assets/regen-png.ps1
 ```
+
+That script reads `docs/assets/architecture-overview.svg` and `docs/assets/architecture.svg` and writes the matching `.png` files. First run installs `sharp` into a scratch folder under `$env:TEMP` (one-time, ~10s); subsequent runs are instant. Requires Node.js on PATH.
 
 | # | Component | Role |
 |---|---|---|

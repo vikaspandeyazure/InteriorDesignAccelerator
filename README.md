@@ -36,6 +36,7 @@ The narrative is **honest about its boundaries**: MAI provides *inspiration*; Fo
 | Capability | Implemented by |
 |---|---|
 | Real product grounding (no hallucinations) | **Azure AI Search** with per-brand semantic indexes, seeded from PDFs via **Document Intelligence Layout** |
+| **Foundry IQ Knowledge Base** | `bath-fittings-kb` on the AI Search service combining `jaguar-ks` + `parryware-ks` knowledge sources (auto-provisioned by `deploy.ps1` Phase 8c-pre, visible in Foundry portal -> Build -> Knowledge -> Knowledge bases) |
 | Photoreal visual interpretation | **MAI-Image-2** (Microsoft-published Foundry image model) |
 | Re-ranking and concise narratives | **gpt-4.1-mini** chat model on Foundry |
 | Multi-agent orchestration | **Microsoft Agent Framework** style pipeline (Plan -> Retrieve -> Compose -> Render) |
@@ -126,6 +127,60 @@ For more depth see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/FLO
 
 ---
 
+## How Foundry IQ is used (and where in the code)
+
+Foundry IQ shows up in two distinct places in this build. Both are real, both are loggable.
+
+### 1. Build-time - the Knowledge Base resource
+
+`infra/scripts/deploy.ps1` Phase **8c-pre** issues three `PUT`s against the Azure AI Search service:
+
+| Resource | REST call (api-version=`2025-11-01-preview`) |
+|---|---|
+| `jaguar-ks` knowledge source | `PUT https://{search}.search.windows.net/knowledgesources/jaguar-ks` (wraps the `jaguar-catalog` index) |
+| `parryware-ks` knowledge source | `PUT https://{search}.search.windows.net/knowledgesources/parryware-ks` (wraps the `parryware-catalog` index) |
+| `bath-fittings-kb` knowledge base | `PUT https://{search}.search.windows.net/knowledgebases/bath-fittings-kb` (references both knowledge sources above) |
+
+After deploy, the KB is visible in **Foundry portal -> Build -> Knowledge -> Knowledge bases**. The deployer's `Search Service Contributor` role (granted by `infra/modules/search.bicep`) is what allows this control-plane call.
+
+### 2. Run-time - the semantic search call (per user brief)
+
+`src/Orchestrator.Api/Services/CatalogSearchService.cs` line 84:
+
+```csharp
+var options = new SearchOptions {
+    Size = perIndexTop,
+    QueryType = SearchQueryType.Semantic,
+    SemanticSearch = new SemanticSearchOptions { SemanticConfigurationName = "default" }
+};
+var response = await client.SearchAsync<SearchDocument>(query, options, ct);   // <-- the Foundry IQ call
+```
+
+This is invoked from `FoundryCatalogSearchAgent.FindAsync` line 78 (`Step A`) - the orchestrator's UAMI hits the AI Search semantic endpoint, fans out across both brand indexes, and returns the top-12 candidates. Then `Step B` hands those 12 to the `catalog-search-agent` for re-ranking.
+
+### What the catalog-search-agent contributes
+
+The Foundry-side `catalog-search-agent` (gpt-4.1-mini) is a **re-ranker over text**, not a retrieval agent:
+
+- **Dedup** of near-duplicate products that AI Search returns from multiple PDF pages
+- **Brief-fit judgment** - re-orders by fit to the user's design intent rather than raw vector similarity
+- **Brand-balance** - when both Jaguar + Parryware are selected, ensures the gallery represents both
+
+It operates on the JSON candidate list the orchestrator hands it inline, so it doesn't need its own knowledge bindings to do its job. The Foundry IQ KB created in step 1 above is the deployed artifact for the integration story; the runtime path uses the underlying AI Search semantic surface that the KB wraps.
+
+### File:line cheat-sheet
+
+| Concept | File | Line(s) |
+|---|---|---|
+| KB creation REST | `infra/scripts/deploy.ps1` | Phase 8c-pre block (~2229-2400) |
+| Semantic search options | `src/Orchestrator.Api/Services/CatalogSearchService.cs` | 76-81 |
+| The actual Foundry IQ call | `src/Orchestrator.Api/Services/CatalogSearchService.cs` | 84 |
+| Where the orchestrator invokes it | `src/Orchestrator.Api/Agents/Foundry/FoundryAgents.cs` | 78 (`Step A`) |
+| Agent re-rank | `src/Orchestrator.Api/Agents/Foundry/FoundryAgents.cs` | 92 (`Step B`) |
+| Index semantic configuration definition | `infra/scripts/deploy.ps1` | Phase 6 (~1762-1770) |
+
+---
+
 ## Repository layout
 
 ```
@@ -145,6 +200,10 @@ tests/
   Orchestrator.Tests/                       xUnit smoke tests
 tools/
   CatalogExtractor/                         Document Intelligence Layout extractor (deploy-time)
+  foundry-test/                             Standalone REST harness for probing the Foundry agents
+                                            binding API surface (test-create-agent.ps1) - useful when
+                                            Microsoft updates the preview shape and we want to retry
+                                            attaching the KB without running the full deploy
 agents/                                     Foundry hosted-agent JSON definitions
 infra/
   modules/                                  One Bicep module per Azure resource
@@ -250,9 +309,9 @@ STARTED         orchestrator       brief='Design a luxury marble ensuite...', br
 PLAN-BEGIN      chat               rewriting brief into search query...
 PLAN            chat               luxury marble ensuite Jaguar brushed gold single-lever basin mixer ...
 RETRIEVE-BEGIN  catalog-search     querying brand catalog indexes...
-RETRIEVE        catalog-search     4 products: jaguar/Jaguar Laguna Collection (p.1); parryware/... (p.5)
+RETRIEVE        catalog-search     8 products: parryware/Parryware Catalogue (1) - page 5; jaguar/Jaguar Laguna Collection (p.1); ...
 COMPOSE-BEGIN   chat               writing narrative + image prompt...
-COMPOSE         chat               Photo-realistic modern Scandinavian luxury ensuite bathroom...
+COMPOSE         chat               Eye-level wide shot of a modern minimalist luxury ensuite bathroom...
 RENDER-BEGIN    image-gen          calling MAI image model (this can take 20-40s)...
 RENDER          image-gen          1010 KB image
 DONE            orchestrator       58777 ms
@@ -272,7 +331,7 @@ For questions, see **[`SUPPORT.md`](SUPPORT.md)**.
 
 This repository's **code** is licensed under the **MIT License** - see [`LICENSE`](LICENSE).
 
-Catalog PDFs/images of **Jaguar** and **Parryware** products are **third-party copyrighted material**. They are referenced for the demo only and are **not** redistributed in this repository. Place them under `C:\Bath Fittings Data\jaguar` and `C:\Bath Fittings Data\parryware` on your machine; `deploy.ps1` copies them into `data/catalogs/` and uploads them to Azure Blob Storage at deploy time. You are responsible for your right to use these materials.
+Catalog PDFs/images of **Jaguar** and **Parryware** products are **third-party copyrighted material**. They are referenced for the demo only and are **not** redistributed in this repository. Place them under `data/catalogs/jaguar/` and `data/catalogs/parryware/` in the repo (these folders are git-ignored except for `.gitkeep`); `deploy.ps1` Phase 5 then differentially syncs them to Azure Blob Storage. If you have a folder elsewhere, pass it once with `-CatalogSourcePath '<path>'` and the script will stage it into `data/catalogs/` for you. You are responsible for your right to use these materials.
 
 The names *Jaguar* and *Parryware* are trademarks of their respective owners and are used here strictly to illustrate a brand-grounded retrieval pattern.
 
